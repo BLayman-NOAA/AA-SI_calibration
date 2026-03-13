@@ -2,102 +2,96 @@
 
 <div align="center">
 
-# NOAA Fisheries AA-SI Python Package Template
+# AA-SI Calibration Library
 
-**A modern Python package template for NOAA Fisheries Active Acoustics Strategic Initiative projects**
+**Calibration routines, standardized formats, and tools for reading and evaluating sonar calibration data**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-[Getting Started](#getting-started) •
-[Customization Checklist](#customization-checklist) •
-[Development](#development) •
+[Overview](#overview) •
+[Installation](#installation) •
+[Usage](#usage) •
 [Project Structure](#project-structure)
 
 </div>
 
 ---
 
-## Getting Started
+## Overview
 
-### Use This Template
+Calibration is a fundamental and critical component of ensuring acoustic data are of high quality and can be used for quantitative stock assessment, ecosystem science, and fisheries management. This repository provides functions, routines, and other information for reading and evaluating calibration data and calibration results.
 
-1. Click the **"Use this template"** button on GitHub
-2. Name your new repository
-3. Clone your new repository locally
-4. Follow the [Customization Checklist](#customization-checklist) below
+Key capabilities:
+
+- **Raw file reading** — Extract channel configurations from Simrad EK60/EK80 `.raw` files
+- **Manufacturer calibration parsing** — Parse EK60 `.cal` and EK80 `.xml` calibration files
+- **Standardized calibration format** — Validate, convert, and save calibration data against a JSON schema
+- **Channel-to-calibration mapping** — Automatically match raw file channels to the correct calibration parameters
+- **Manual calibration workflow** — Generate template files for user-provided calibration values
+
+### Standardized Calibration File Format
+
+The `standardized_file/` folder contains examples of our proposed standardized calibration file format and its JSON schema. Please note that this format is a work in progress and not a finalized convention or standard.
+
+As part of the calibration effort, we've started documenting differences between the various formats and standards for storing calibration data:
+- [Calibration Parameter Nomenclature and Structure](https://docs.google.com/document/d/1JcOW-rruu92jznbOPTHcbPeEvHDVz-Qx0toAXt6V3h8/edit?usp=sharing)
+- [Questions and Feedback for ICES on SONAR-netCDF4 v2.0](https://docs.google.com/document/d/1Pq0om-HpDSQI-G8n6Lajo-POEZ5eTs_bauCjT7rhVU8/edit?usp=sharing)
+
+---
+
+## Installation
 
 ### Requirements
 
 - Python 3.10 or higher
 - pip
 
----
-
-## Customization Checklist
-
-After creating your repository from this template, complete the following steps:
-
-### 1. Rename the Package
-
-Replace all instances of `mypackagename` with your actual package name:
-
-| Location | Action |
-|----------|--------|
-| `src/mypackagename/` | Rename the folder |
-| `pyproject.toml` | Update `name`, URLs, and tool paths |
-| `src/mypackagename/__init__.py` | Update imports and docstring |
-| `tests/test_package.py` | Update import statements |
-
-### 2. Update Project Metadata
-
-Edit `pyproject.toml`:
-
-- `name` - Your package name
-- `version` - Start with `0.1.0`
-- `description` - Brief description of your package
-- `authors` / `maintainers` - Your information
-- `keywords` - Relevant search terms
-
-### 3. Update URLs
-
-In `pyproject.toml`, update `[project.urls]` with your repository information.
-
-### 4. Add Dependencies
-
-Add your package dependencies to the `dependencies` list in `pyproject.toml`.
-
-### 5. Update Documentation
-
-| File | Action |
-|------|--------|
-| `README.md` | Replace with your project documentation |
-| `CHANGELOG.md` | Update links to your repository |
-| `NOTICE` | Update copyright information |
-| `LICENSE` | Verify Apache 2.0 meets your needs |
-
-### 6. Clean Up
-
-- Delete this checklist section after completing setup
-- Make your first commit
-
----
-
-## Development
-
-### Installation
+### Install from source
 
 ```bash
 # Clone the repository
-git clone https://github.com/nmfs-ost/your-repo-name.git
-cd your-repo-name
-
-# Create a virtual environment
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+git clone https://github.com/nmfs-ost/AA-SI_calibration.git
+cd AA-SI_calibration
 
 # Install in development mode
+pip install -e .
+
+# With echopype support (for calibration.py)
+pip install -e ".[echopype]"
+
+# With development tools
+pip install -e ".[dev]"
+
+# With schema documentation generation
+pip install -e ".[schema-docs]"
+```
+
+---
+
+## Usage
+
+Once installed, import directly — no `sys.path` manipulation needed:
+
+```python
+from calibration_library.raw_reader_api import process_raw_folder, save_yaml
+from calibration_library.manufacturer_file_parsers import extract_and_convert_calibration_params
+from calibration_library.standardized_file_lib import save_single_channel_files_from_params
+from calibration_library.mapping_algorithm import (
+    load_raw_configs,
+    load_calibration_data_from_single_files,
+    build_mapping,
+    get_calibration,
+)
+```
+
+---
+
+### Development Setup
+
+```bash
+# Install in development mode with dev tools
 pip install -e ".[dev]"
 
 # Set up pre-commit hooks
@@ -108,14 +102,14 @@ pre-commit install
 
 ```bash
 pytest
-pytest --cov=mypackagename
+pytest --cov=calibration_library
 ```
 
 ### Code Quality
 
 ```bash
 black src/ tests/
-pylint src/mypackagename
+pylint src/calibration_library
 pre-commit run --all-files
 ```
 
@@ -139,9 +133,33 @@ python -m build
 ├── NOTICE
 ├── pyproject.toml
 ├── README.md
+├── Roadmap/
 ├── src/
-│   └── mypackagename/
-│       └── __init__.py
+│   └── calibration_library/
+│       ├── __init__.py
+│       ├── calibration.py
+│       ├── constants.py
+│       ├── mapping_algorithm.py
+│       ├── manufacturer_file_parsers.py
+│       ├── raw_reader_api.py
+│       ├── standardized_file_lib.py
+│       ├── utils.py
+│       ├── schema/
+│       │   ├── schema_docs_generator.py
+│       │   └── standardized_calibration_file_schema.json
+│       └── simrad_reader/
+│           ├── base_reader.py
+│           ├── geometery_tools.py
+│           ├── raw_reader.py
+│           └── reader_errors.py
+├── notebooks/
+│   ├── full_pipeline.ipynb              # Full workflow: raw files + manufacturer cal files -> mapping
+│   ├── manual_pipeline.ipynb            # Manual workflow: generate templates for user-provided values
+│   ├── user_provided_cal_pipeline.ipynb # Quick workflow: pre-made single-channel files -> mapping
+│   └── example_data/                    # Sample EK60/EK80 data for the notebooks
+├── standardized_file/
+│   ├── examples/
+│   └── json_schema/
 └── tests/
     ├── conftest.py
     └── test_package.py
@@ -151,7 +169,7 @@ python -m build
 
 ## License
 
-This template uses the Apache License 2.0. Verify this license meets your project requirements before use.
+This project uses the Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ---
 

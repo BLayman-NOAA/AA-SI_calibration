@@ -1,0 +1,533 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "replace-this-with-uri-where-this-file-is-stored-noaa-aa-si-calibration-schema",
+	"title": "Standardized Calibration File",
+	"description": "Schema for a standardized sonar calibration file. Note that many parameter definitions follow the SONAR-netCDF4 convention for sonar data (v2.0, ICES WGFAST Open Data subgroup, generated 2025-02-22 03:11:38 UTC). See https://htmlpreview.github.io/?https://github.com/ices-publications/SONAR-netCDF4/blob/master/Formatted_docs/crr341.html for the full reference.",
+	"$comment": "Reference: The SONAR-netCDF4 convention for sonar data, version 2.0 (ICES WGFAST - Open Data subgroup, version 2.1 working draft generated 2025-02-22 03:11:38 UTC). International Council for the Exploration of the Sea, H. C. Andersens Boulevard 44-46, DK-1553 Copenhagen V, Denmark. Tel (+45) 33 38 67 00. https://htmlpreview.github.io/?https://github.com/ices-publications/SONAR-netCDF4/blob/master/Formatted_docs/crr341.html",
+	"type": "object",
+	"additionalProperties": false,
+	"properties": {
+		"file_creation_date": {
+			"type": "string",
+			"format": "date-time",
+			"title": "File creation timestamp",
+			"description": "ISO8601 timestamp indicating when this standardized calibration file was produced.",
+			"examples": [
+				"2025-12-03T20:01:06.089757+00:00"
+			]
+		},
+		"cruise_id": {
+			"type": [
+				"string",
+				"null"
+			],
+			"description": "Identifier of the cruise or mission associated with this calibration dataset.",
+			"examples": [
+				"HB1603"
+			]
+		},
+		"calibration_report_title": {
+			"type": [
+				"string",
+				"null"
+			],
+			"description": "Title of the calibration report or document."
+		},
+		"calibration_report_DOI": {
+			"type": [
+				"string",
+				"null"
+			],
+			"description": "Digital Object Identifier for the calibration report."
+		},
+		"calibration_report": {
+			"type": [
+				"string",
+				"null"
+			],
+			"description": "URL or reference to the full calibration report."
+		},
+		"channels": {
+			"type": "array",
+			"minItems": 1,
+			"description": "Ordered list of channel parameter blocks sorted by increasing frequency.",
+			"items": {
+				"$ref": "#/$defs/channelBlock"
+			}
+		}
+	},
+	"required": [
+		"file_creation_date",
+		"channels"
+	],
+	"$defs": {
+		"channelBlock": {
+			"type": "object",
+			"description": "Calibration parameters for a single sonar channel.",
+			"additionalProperties": false,
+			"properties": {
+				"sonar_serial_number": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Sonar serial number",
+					"description": "Manufacturer serial number for the sonar head associated with this channel.",
+					"x-reference": "SONAR-netCDF4 2.0 Sonar.sonar_serial_number"
+				},
+				"sonar_software_version": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Sonar software version",
+					"description": "Version string of the sonar software controlling this channel.",
+					"examples": [
+						"2.4.3"
+					],
+					"x-reference": "SONAR-netCDF4 2.0 Sonar.sonar_software_version"
+				},
+				"sonar_software_name": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Sonar software name",
+					"description": "Name of the sonar control or acquisition software.",
+					"x-reference": "SONAR-netCDF4 2.0 Sonar.sonar_software_name"
+				},
+				"channel": {
+					"type": "string",
+					"title": "Channel identifier",
+					"description": "Identifier of the transceiver/channel."
+				},
+				"source_filenames": {
+					"type": [
+						"array",
+						"null"
+					],
+					"title": "Channel source filenames",
+					"description": "List of calibration source files that produced this channel's parameters.",
+					"items": {
+						"type": "string"
+					},
+					"examples": [
+						[
+							"HBB_018kHz_18July2016.cal"
+						]
+					]
+				},
+				"source_file_type": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Channel source file type",
+					"description": "File extension or descriptor describing the calibration source files linked to this channel.",
+					"examples": [
+						".raw",
+						".cal"
+					]
+				},
+				"source_file_location": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Channel source file location",
+					"description": "Human-readable location of the calibration source files that contributed to this channel.",
+					"examples": [
+						"NCEI",
+						"OMAO",
+						"HDD"
+					]
+				},
+				"source_file_paths": {
+					"type": [
+						"array",
+						"null"
+					],
+					"title": "Channel source file paths",
+					"description": "Absolute or relative paths to the calibration source files for this channel.",
+					"items": {
+						"type": "string"
+					}
+				},
+				"frequency": {
+					"type": "number",
+					"title": "Acoustic frequency",
+					"description": "Frequency of the receive echo from spectral analysis of the FM pulse or frequency of the CW pulse.",
+					"x-units": "Hz",
+					"x-precision": 10,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.frequency",
+					"examples": [
+						18000.0,
+						38000.0,
+						70000.0
+					]
+				},
+				"absorption_indicative": {
+					"type": "number",
+					"title": "Indicative acoustic absorption",
+					"description": "Indicative absorption values used to calculate the time-varied gain (TVG) in the absence of detailed data.",
+					"x-units": "dB/m",
+					"x-precision": 10,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Environment.absorption_indicative",
+					"examples": [
+						0.01,
+						0.02
+					]
+				},
+				"sound_speed_indicative": {
+					"type": "number",
+					"title": "Indicative sound speed",
+					"description": "Mean sound speed in water used to calculate echo range when detailed profiles are unavailable.",
+					"x-units": "m/s",
+					"x-precision": 2,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Environment.sound_speed_indicative",
+					"examples": [
+						1522.6
+					]
+				},
+				"gain_correction": {
+					"type": "number",
+					"title": "Gain correction",
+					"description": "Gain correction set from a calibration exercise (required for type 2 conversion equations).",
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.gain_correction",
+					"x-units": "dB",
+					"x-precision": 2,
+					"examples": [
+						24.06,
+						25.41
+					]
+				},
+				"sa_correction": {
+					"type": "number",
+					"title": "Sa correction",
+					"description": "Nautical area scattering coefficient correction derived from calibration.",
+					"x-units": "dB",
+					"x-precision": 2,
+					"examples": [
+						-0.68,
+						-0.32
+					]
+				},
+				"equivalent_beam_angle": {
+					"type": "number",
+					"title": "Equivalent beam angle",
+					"description": "Equivalent beam angle of the receive beam.",
+					"x-units": "dB re sr",
+					"x-precision": 2,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.equivalent_beam_angle",
+					"examples": [
+						-17.0
+					]
+				},
+				"beamwidth_transmit_major": {
+					"type": "number",
+					"title": "Half power one-way transmit beam width along major axis",
+					"description": "One-way beam width at half-power down in the horizontal (major) direction of the transmit beam.",
+					"x-units": "arc_degree",
+					"x-precision": 2,
+					"minimum": 0.0,
+					"maximum": 360.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.beamwidth_transmit_major",
+					"examples": [
+						11.06,
+						6.97
+					]
+				},
+				"beamwidth_receive_major": {
+					"type": "number",
+					"title": "Half power one-way receive beam width along major axis",
+					"description": "One-way beam width at half-power down in the horizontal (major) direction of the receive beam.",
+					"x-units": "arc_degree",
+					"x-precision": 2,
+					"minimum": 0.0,
+					"maximum": 360.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.beamwidth_receive_major",
+					"examples": [
+						11.06,
+						6.97
+					]
+				},
+				"beamwidth_transmit_minor": {
+					"type": "number",
+					"title": "Half power one-way transmit beam width along minor axis",
+					"description": "One-way beam width at half-power down in the vertical (minor) direction of the transmit beam.",
+					"x-units": "arc_degree",
+					"x-precision": 2,
+					"minimum": 0.0,
+					"maximum": 360.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.beamwidth_transmit_minor",
+					"examples": [
+						10.56,
+						6.87
+					]
+				},
+				"beamwidth_receive_minor": {
+					"type": "number",
+					"title": "Half power one-way receive beam width along minor axis",
+					"description": "One-way beam width at half-power down in the vertical (minor) direction of the receive beam.",
+					"x-units": "arc_degree",
+					"x-precision": 2,
+					"minimum": 0.0,
+					"maximum": 360.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.beamwidth_receive_minor",
+					"examples": [
+						10.56,
+						6.87
+					]
+				},
+				"echoangle_major": {
+					"type": "number",
+					"title": "Echo arrival angle in the major beam coordinate",
+					"description": "Electrical phase-derived arrival angle relative to the major beam coordinate.",
+					"x-units": "arc_degree",
+					"x-precision": 2,
+					"minimum": -180.0,
+					"maximum": 180.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.echoangle_major",
+					"examples": [
+						0.01,
+						-0.12
+					]
+				},
+				"echoangle_minor": {
+					"type": "number",
+					"title": "Echo arrival angle in the minor beam coordinate",
+					"description": "Electrical phase-derived arrival angle relative to the minor beam coordinate.",
+					"x-units": "arc_degree",
+					"x-precision": 2,
+					"minimum": -180.0,
+					"maximum": 180.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.echoangle_minor",
+					"examples": [
+						-0.07,
+						-0.09
+					]
+				},
+				"echoangle_major_sensitivity": {
+					"type": "number",
+					"title": "Major angle scaling factor",
+					"description": "Scaling factor converting electrical phase differences to physical echo arrival angles (major axis).",
+					"x-units": "1",
+					"x-precision": 10,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.echoangle_major_sensitivity",
+					"examples": [
+						13.9,
+						23.0
+					]
+				},
+				"echoangle_minor_sensitivity": {
+					"type": "number",
+					"title": "Minor angle scaling factor",
+					"description": "Scaling factor converting electrical phase differences to physical echo arrival angles (minor axis).",
+					"x-units": "1",
+					"x-precision": 10,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.echoangle_minor_sensitivity",
+					"examples": [
+						13.9,
+						23.0
+					]
+				},
+				"sample_interval": {
+					"type": "number",
+					"title": "Interval between recorded raw data samples",
+					"description": "Time between individual samples along a beam (common for all beams in a ping).",
+					"x-units": "s",
+					"x-precision": 6,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.sample_interval",
+					"examples": [
+						0.000128
+					]
+				},
+				"transmit_bandwidth": {
+					"type": "number",
+					"title": "Nominal bandwidth of transmitted pulse",
+					"description": "Estimated bandwidth of the transmitted pulse.",
+					"x-units": "Hz",
+					"x-precision": 10,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.transmit_bandwidth",
+					"examples": [
+						1570.0,
+						3030.0
+					]
+				},
+				"transmit_power": {
+					"type": "number",
+					"title": "Nominal transmit power",
+					"description": "Electrical transmit power used for the ping (required for type 1 conversion equations).",
+					"x-units": "W",
+					"x-precision": 10,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.transmit_power",
+					"examples": [
+						1000.0,
+						300.0
+					]
+				},
+				"transmit_duration_nominal": {
+					"type": "number",
+					"title": "Nominal duration of transmitted pulse",
+					"description": "Duration of the transmitted pulse prior to reception (not the effective duration).",
+					"x-units": "s",
+					"x-precision": 6,
+					"minimum": 0.0,
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.transmit_duration_nominal",
+					"examples": [
+						0.001024
+					]
+				},
+				"calibration_date": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Calibration date",
+					"description": "Date associated with the calibration measurements. Derived from calibration report files, so format is free-form.",
+					"examples": [
+						"7/18/2016"
+					]
+				},
+				"calibration_comments": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Calibration comments",
+					"description": "Narrative notes captured during the calibration event."
+				},
+				"calibration_version": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Calibration processing version",
+					"description": "Software or procedure version used when producing these calibration parameters. *add specifics"
+				},
+				"beam_type": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Transducer beam type",
+					"description": "Describes the physical beam type of the transducer (e.g., split-beam, single).",
+					"x-reference": "SONAR-netCDF4 2.0 Sonar/Beam_group.beam_type"
+				},
+				"calibration_acquisition_method": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Calibration acquisition method",
+					"description": "Brief description of the calibration workflow or platform used."
+				},
+				"sphere_diameter": {
+					"type": [
+						"number",
+						"null"
+					],
+					"title": "Calibration sphere diameter",
+					"description": "Diameter of the calibration sphere.",
+					"x-units": "mm",
+					"x-precision": 10,
+					"minimum": 0.0
+				},
+				"sphere_material": {
+					"type": [
+						"string",
+						"null"
+					],
+					"title": "Calibration sphere material",
+					"description": "Material of the calibration sphere.",
+					"examples": [
+						"tungsten carbide"
+					]
+				},
+				"temperature": {
+					"type": [
+						"number",
+						"null"
+					],
+					"title": "Water temperature",
+					"description": "Ambient water temperature recorded during calibration.",
+					"x-units": "degC",
+					"x-precision": 2
+				},
+				"salinity": {
+					"type": [
+						"number",
+						"null"
+					],
+					"title": "Water salinity",
+					"description": "Water salinity during calibration.",
+					"x-units": "psu",
+					"x-precision": 10,
+					"minimum": 0.0
+				}
+			},
+			"required": [
+				"channel",
+				"frequency"
+			]
+		}
+	},
+	"examples": [
+		{
+			"file_creation_date": "2025-12-10T18:05:48.252383+00:00",
+			"cruise_id": "HB1603",
+			"calibration_report_title": null,
+			"calibration_report_DOI": null,
+			"calibration_report": null,
+			"channels": [
+				{
+					"channel": "GPT  18 kHz 009072056b0e 2-1 ES18-11",
+					"source_filenames": [
+						"HBB_018kHz_18July2016.cal"
+					],
+					"source_file_type": ".cal",
+					"source_file_location": null,
+					"source_file_paths": null,
+					"sonar_serial_number": "009072056b0e",
+					"sonar_software_version": "2.4.3",
+					"sonar_software_name": null,
+					"frequency": 18000.0,
+					"absorption_indicative": 0.0018,
+					"sound_speed_indicative": 1522.6,
+					"gain_correction": 23.08,
+					"sa_correction": -0.76,
+					"equivalent_beam_angle": -17.0,
+					"beamwidth_transmit_major": 11.06,
+					"beamwidth_receive_major": 11.06,
+					"beamwidth_transmit_minor": 10.56,
+					"beamwidth_receive_minor": 10.56,
+					"echoangle_major": 0.01,
+					"echoangle_minor": -0.07,
+					"echoangle_major_sensitivity": 13.9,
+					"echoangle_minor_sensitivity": 13.9,
+					"sample_interval": 0.000128,
+					"transmit_bandwidth": 1570.0,
+					"transmit_power": 1000.0,
+					"transmit_duration_nominal": 0.001024,
+					"calibration_date": "7/18/2016",
+					"calibration_comments": "HB Bigelow 18 kHz calibration, 38.1-mm WC sphere, Newport naval anchorage south of bridge, 18 July 2016",
+					"calibration_version": null,
+					"beam_type": null,
+					"calibration_acquisition_method": null,
+					"sphere_diameter": null,
+					"sphere_material": null,
+					"temperature": null,
+					"salinity": null
+				}
+			]
+		}
+	]
+}

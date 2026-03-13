@@ -1,0 +1,190 @@
+- filename: D20230721-T174615.raw
+  metadata_start_time: '2023-07-21T17:46:15'
+  first_ping_time: '2023-07-21T17:46:15.147+00:00'
+  last_ping_time: '2023-07-21T17:46:33.146+00:00'
+  raw3_count: 76
+  gps_data:
+    first_gps:
+      latitude: 41.515678
+      longitude: -71.340823
+      timestamp: '2023-07-21T17:46:15.147202+00:00'
+      nmea_sentence: $INGGA,174635.514,4130.94071,N,07120.44937,W,2,23,1.1,-0.63,M,,,5,0131
+    last_gps:
+      latitude: 41.515038
+      longitude: -71.341385
+      timestamp: '2023-07-21T17:46:33.844928+00:00'
+      nmea_sentence: $INGGA,174654.514,4130.90227,N,07120.48312,W,2,24,1.1,-0.58,M,,,6,0131
+    nmea_count: 313
+    valid_gps_count: 20
+    sentence_types:
+    - INGGA
+  channels:
+  - channel_id: WBT 400479-15 ES18_ES
+    transceiver_id: '400479'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c5f
+    transceiver_serial_number: '400479'
+    transceiver_number: 1
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: null
+    transducer_model: ES18
+    frequency: 18000.0
+    nominal_transducer_frequency: 18000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 1000.0
+    pulse_form: '0'
+    frequency_start: 18000.0
+    frequency_end: 18000.0
+  - channel_id: WBT 400528-15 ES38-7_ES
+    transceiver_id: '400528'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c90
+    transceiver_serial_number: '400528'
+    transceiver_number: 2
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: '447'
+    transducer_model: ES38-7
+    frequency: 38000.0
+    nominal_transducer_frequency: 38000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 1000.0
+    pulse_form: '1'
+    frequency_start: 34000.0
+    frequency_end: 45000.0
+  - channel_id: WBT 400503-15 ES70-7C_ES
+    transceiver_id: '400503'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c77
+    transceiver_serial_number: '400503'
+    transceiver_number: 3
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: null
+    transducer_model: ES70-7C
+    frequency: 70000.0
+    nominal_transducer_frequency: 70000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 750.0
+    pulse_form: '1'
+    frequency_start: 45000.0
+    frequency_end: 90000.0
+  - channel_id: WBT 400509-15 ES200-7C_ES
+    transceiver_id: '400509'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c7d
+    transceiver_serial_number: '400509'
+    transceiver_number: 4
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: null
+    transducer_model: ES200-7C
+    frequency: 200000.0
+    nominal_transducer_frequency: 200000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 150.0
+    pulse_form: '1'
+    frequency_start: 160000.0
+    frequency_end: 260000.0
+  file_format: EK80
+  instrument: EK80
+- filename: D20230721-T174634.raw
+  metadata_start_time: '2023-07-21T17:46:34'
+  first_ping_time: '2023-07-21T17:46:34.146+00:00'
+  last_ping_time: '2023-07-21T17:46:52.146+00:00'
+  raw3_count: 76
+  gps_data:
+    first_gps:
+      latitude: 41.515038
+      longitude: -71.341385
+      timestamp: '2023-07-21T17:46:34.146692+00:00'
+      nmea_sentence: $INGGA,174654.514,4130.90227,N,07120.48312,W,2,24,1.1,-0.58,M,,,6,0131
+    last_gps:
+      latitude: 41.514396
+      longitude: -71.341944
+      timestamp: '2023-07-21T17:46:52.845434+00:00'
+      nmea_sentence: $INGGA,174713.514,4130.86374,N,07120.51666,W,2,24,1.1,-0.67,M,,,7,0131
+    nmea_count: 314
+    valid_gps_count: 20
+    sentence_types:
+    - INGGA
+  channels:
+  - channel_id: WBT 400479-15 ES18_ES
+    transceiver_id: '400479'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c5f
+    transceiver_serial_number: '400479'
+    transceiver_number: 1
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: null
+    transducer_model: ES18
+    frequency: 18000.0
+    nominal_transducer_frequency: 18000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 1000.0
+    pulse_form: '0'
+    frequency_start: 18000.0
+    frequency_end: 18000.0
+  - channel_id: WBT 400528-15 ES38-7_ES
+    transceiver_id: '400528'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c90
+    transceiver_serial_number: '400528'
+    transceiver_number: 2
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: '447'
+    transducer_model: ES38-7
+    frequency: 38000.0
+    nominal_transducer_frequency: 38000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 1000.0
+    pulse_form: '1'
+    frequency_start: 34000.0
+    frequency_end: 45000.0
+  - channel_id: WBT 400503-15 ES70-7C_ES
+    transceiver_id: '400503'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c77
+    transceiver_serial_number: '400503'
+    transceiver_number: 3
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: null
+    transducer_model: ES70-7C
+    frequency: 70000.0
+    nominal_transducer_frequency: 70000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 750.0
+    pulse_form: '1'
+    frequency_start: 45000.0
+    frequency_end: 90000.0
+  - channel_id: WBT 400509-15 ES200-7C_ES
+    transceiver_id: '400509'
+    transceiver_model: WBT
+    transceiver_ethernet_address: 009072061c7d
+    transceiver_serial_number: '400509'
+    transceiver_number: 4
+    transceiver_port: 15
+    channel_instance_number: 1
+    multiplexing_found: false
+    transducer_serial_number: null
+    transducer_model: ES200-7C
+    frequency: 200000.0
+    nominal_transducer_frequency: 200000.0
+    transmit_duration_nominal: 0.001024
+    transmit_power: 150.0
+    pulse_form: '1'
+    frequency_start: 160000.0
+    frequency_end: 260000.0
+  file_format: EK80
+  instrument: EK80

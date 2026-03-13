@@ -2,6 +2,9 @@
 *.nc
 *.raw
 *.zarr
+*.idx
+*.raw
+*.bot
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

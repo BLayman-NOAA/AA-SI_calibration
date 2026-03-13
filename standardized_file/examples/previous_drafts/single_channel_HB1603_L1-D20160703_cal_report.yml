@@ -1,0 +1,43 @@
+file_creation_date: '2025-12-10T18:05:48.252383+00:00'
+cruise_id: HB1603
+calibration_report_title: null
+calibration_report_DOI: null
+calibration_report: null
+channels:
+- channel: GPT  18 kHz 009072056b0e 2-1 ES18-11
+  source_filenames:
+  - HBB_018kHz_18July2016.cal
+  source_file_type: .cal
+  source_file_location: null
+  source_file_paths: null
+  sonar_serial_number: 009072056b0e
+  sonar_software_version: 2.4.3
+  sonar_software_name: null
+  frequency: 18000.0
+  absorption_indicative: 0.0018
+  sound_speed_indicative: 1522.6
+  gain_correction: 23.08
+  sa_correction: -0.76
+  equivalent_beam_angle: -17.0
+  beamwidth_transmit_major: 11.06
+  beamwidth_receive_major: 11.06
+  beamwidth_transmit_minor: 10.56
+  beamwidth_receive_minor: 10.56
+  echoangle_major: 0.01
+  echoangle_minor: -0.07
+  echoangle_major_sensitivity: 13.9
+  echoangle_minor_sensitivity: 13.9
+  sample_interval: 0.000128
+  transmit_bandwidth: 1570.0
+  transmit_power: 1000.0
+  transmit_duration_nominal: 0.001024
+  calibration_date: 7/18/2016
+  calibration_comments: '    HB Bigelow 18 kHz calibration, 38.1-mm WC sphere, Newport
+    naval anchorage south of bridge, 18 July 2016'
+  calibration_version: null
+  beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
