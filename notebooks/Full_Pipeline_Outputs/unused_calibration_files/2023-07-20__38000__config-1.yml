@@ -1,35 +1,35 @@
-"source_filenames": ["CalibrationDataFile-D20230720-T225417-18CW.xml"]
+"source_filenames": ["CalibrationDataFile-D20230720-T232023-38CW_onaxis.xml"]
 "record_created": "2026-03-17T18:27:12.364648+00:00"
 "record_author": "Placeholder Author"
-"channel": "ES18 Serial No: 0"
-"transceiver_id": "400479"
+"channel": "ES38-7 Serial No: 447 - Narrow"
+"transceiver_id": "400528"
 "transceiver_model": "TransceiverTypeWBT"
-"transceiver_ethernet_address": "400479"
-"transceiver_serial_number": "400479"
+"transceiver_ethernet_address": "400528"
+"transceiver_serial_number": "400528"
 "transceiver_number": null
 "transceiver_port": null
 "channel_instance_number": 1
-"transducer_model": "ES18"
-"transducer_serial_number": null
+"transducer_model": "ES38-7"
+"transducer_serial_number": "447"
 "pulse_form": "0"
-"frequency_start": 18000.0
-"frequency_end": 18000.0
-"nominal_transducer_frequency": 18000.0
+"frequency_start": 38000.0
+"frequency_end": 38000.0
+"nominal_transducer_frequency": 38000.0
 "transmit_power": 1000.0
 "transmit_duration_nominal": 0.001024
 "multiplexing_found": null
 "calibration_date": "2023-07-20"
 "calibration_comments": "\n    "
 "calibration_version": null
-"absorption_indicative": 0.002661
+"absorption_indicative": 0.009777
 "sound_speed_indicative": 1526.5
 "temperature": 10.0
 "salinity": 35.0
 "acidity": 8.0
 "pressure": null
-"sample_interval": 2.8e-05
+"sample_interval": 4.8e-05
 "transmit_bandwidth": 0.0
-"beam_type": "BeamTypeSplit"
+"beam_type": "BeamTypeSplit3CN"
 "calibration_acquisition_method": null
 "sphere_diameter": 38.1
 "sphere_material": "tungsten carbide"
@@ -37,16 +37,16 @@
 "source_file_location": null
 "sonar_software_version": "21.15.2.0"
 "sonar_software_name": "EK80"
-"equivalent_beam_angle": -17.0
-"gain_correction": [22.99]
-"sa_correction": [-0.0262]
-"frequency": [18000.0]
-"beamwidth_transmit_major": [10.45]
-"beamwidth_receive_major": [10.45]
-"beamwidth_transmit_minor": [10.44]
-"beamwidth_receive_minor": [10.44]
-"echoangle_major": [-0.24]
-"echoangle_minor": [-0.33]
+"equivalent_beam_angle": -20.7
+"gain_correction": [26.67]
+"sa_correction": [-0.0389]
+"frequency": [38000.0]
+"beamwidth_transmit_major": [7.19]
+"beamwidth_receive_major": [7.19]
+"beamwidth_transmit_minor": [6.85]
+"beamwidth_receive_minor": [6.85]
+"echoangle_major": [-0.09]
+"echoangle_minor": [0.02]
 "echoangle_major_sensitivity": null
 "echoangle_minor_sensitivity": null
 "source_file_paths": null
