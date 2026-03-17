@@ -1246,6 +1246,10 @@ def extract_and_convert_calibration_params(cal_folder, nc_frequencies=None, outp
     
     print(f"Detected calibration file type: {file_type}")
     
+    # Sort frequencies if provided (callers can pass an unsorted set or list)
+    if nc_frequencies is not None:
+        nc_frequencies = sorted(nc_frequencies)
+    
     if file_type == "EK60":
         # For EK60, we need frequencies for sorting
         if nc_frequencies is None:

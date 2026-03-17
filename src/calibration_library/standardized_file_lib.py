@@ -1770,3 +1770,117 @@ def check_required_fields(template: dict) -> list:
 
     return unfilled
 
+
+def generate_calibration_templates(
+    unique_channels: dict,
+    calibration_date: str,
+    record_author: str,
+    output_dir,
+    short_filenames: bool = False,
+) -> dict:
+    """Generate calibration template files from unique channel configurations.
+
+    Creates one template ``.yml`` file per unique channel, with null values
+    for the user to fill in. All templates share the same ``record_created``
+    timestamp.
+
+    Args:
+        unique_channels: Dictionary mapping channel_key -> channel_data
+            (as returned by :func:`~calibration_library.raw_reader_api.extract_unique_channels`).
+        calibration_date: Calibration date string (``YYYY-MM-DD``).
+        record_author: Author name to embed in each template.
+        output_dir: Directory to write the individual ``.yml`` files.
+        short_filenames: If True, use compact ``<date>_<freq>_config-<N>``
+            naming; otherwise use long key-derived names.
+
+    Returns:
+        Dictionary mapping channel_key -> template dict (keyed by short
+        keys when *short_filenames* is True).
+    """
+    import datetime as _dt
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    batch_timestamp = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+    # Build filename mapping
+    if short_filenames:
+        filename_map = build_short_filename_map(unique_channels, calibration_date=calibration_date)
+    else:
+        filename_map = {k: calibration_key_to_filename(k) for k in unique_channels}
+
+    # Generate templates
+    calibration_templates = {}
+    for channel_key, channel in unique_channels.items():
+        template = create_calibration_template(channel, calibration_date)
+        template['record_created'] = batch_timestamp
+        template['record_author'] = record_author
+        calibration_templates[channel_key] = template
+
+        safe_name = filename_map[channel_key]
+        template_file = output_dir / f"{safe_name}.yml"
+        save_template_with_comments(template, template_file, calibration_date)
+
+    # Remap to short keys if requested
+    if short_filenames:
+        calibration_templates = {
+            filename_map[k]: v for k, v in calibration_templates.items()
+        }
+        print_short_key_summary(filename_map, {k: unique_channels[k] for k in filename_map})
+
+    print(f"\nGenerated {len(calibration_templates)} calibration template file(s)")
+    print(f"  Output directory: {output_dir}")
+    print(f"  Filename style: {'short' if short_filenames else 'long'}")
+    print(f"  Record created: {batch_timestamp}")
+    print(f"  Record author: {record_author}")
+    print("\nTemplate files created:")
+    for template_file in sorted(output_dir.glob("*.yml")):
+        print(f"  - {template_file.name}")
+
+    return calibration_templates
+
+
+def validate_loaded_templates(
+    template_dir,
+) -> tuple:
+    """Load calibration templates and check each one for completeness.
+
+    Args:
+        template_dir: Directory containing calibration template ``.yml`` files.
+
+    Returns:
+        Tuple of ``(loaded_templates, all_complete)`` where
+        *loaded_templates* is a ``{key: template_dict}`` mapping and
+        *all_complete* is True when every required field is filled.
+    """
+    loaded_templates = load_calibration_templates(template_dir)
+
+    print(f"Loaded {len(loaded_templates)} calibration template(s)")
+    print("=" * 80)
+
+    all_complete = True
+    for template_key, template in loaded_templates.items():
+        unfilled = check_required_fields(template)
+        channel = template.get('channel', 'Unknown')
+
+        if unfilled:
+            all_complete = False
+            print(f"\n  WARNING: {channel}")
+            print(f"   Missing required fields: {', '.join(unfilled)}")
+        else:
+            print(f"\n  OK: {channel}")
+            print(f"   All required fields filled")
+            print(f"   Calibration date: {template.get('calibration_date')}")
+            print(f"   Gain: {template.get('gain_correction')}, Sa: {template.get('sa_correction')}")
+
+    if not all_complete:
+        print("\n" + "=" * 80)
+        print("WARNING: Some templates have missing required fields.")
+        print("Fill in the missing values before using the calibration data.")
+    else:
+        print("\n" + "=" * 80)
+        print("All calibration templates are complete!")
+
+    return loaded_templates, all_complete
+

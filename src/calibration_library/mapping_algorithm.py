@@ -23,9 +23,11 @@ Example usage:
     cal = get_calibration("filename.raw", "channel_id", result.mapping_dict, result.calibration_dict)
 """
 
+import shutil
 import yaml
 import datetime
 from pathlib import Path
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -888,3 +890,399 @@ def build_mapping_from_raw_configs(
             mapping[filename][channel_id] = cal_key
 
     return mapping
+
+
+# =============================================================================
+# REQUIRED CALIBRATION PARAMETER DEFINITIONS
+# =============================================================================
+
+REQUIRED_CALIBRATION_PARAMS = [
+    "calibration_date",
+    "gain_correction",
+    "sa_correction",
+    "equivalent_beam_angle",
+    "beamwidth_transmit_major",
+    "beamwidth_receive_major",
+    "beamwidth_transmit_minor",
+    "beamwidth_receive_minor",
+    "echoangle_major",
+    "echoangle_minor",
+]
+
+# Environmental: either direct values or T/S/P to derive them
+ENVIRONMENTAL_DIRECT = ["absorption_indicative", "sound_speed_indicative"]
+ENVIRONMENTAL_DERIVED = ["temperature", "salinity", "pressure"]
+
+
+# =============================================================================
+# HIGH-LEVEL PIPELINE FUNCTIONS
+# =============================================================================
+
+def _is_missing(value: Any) -> bool:
+    """Return True if a parameter value is effectively missing (None or all-None list)."""
+    if value is None:
+        return True
+    if isinstance(value, list):
+        return all(v is None for v in value)
+    return False
+
+
+def _remove_or_move_file(cal_file_path: Path, keep: bool, unused_dir: Path = None):
+    """Delete or move a calibration file.
+    
+    Args:
+        cal_file_path: Path to the calibration file.
+        keep: If True, move the file to *unused_dir*; otherwise delete it.
+        unused_dir: Destination directory when *keep* is True.
+    """
+    if keep:
+        if unused_dir is None:
+            raise ValueError("unused_dir is required when keep=True")
+        unused_dir.mkdir(parents=True, exist_ok=True)
+        dest = unused_dir / cal_file_path.name
+        shutil.move(str(cal_file_path), str(dest))
+    else:
+        cal_file_path.unlink()
+
+
+def handle_unused_calibration_files(
+    result: MappingResult,
+    calibration_data: Dict[str, Any],
+    cal_files_dir: str | Path,
+    keep_unused: bool = False,
+    unused_dir: str | Path = None,
+) -> List[Path]:
+    """Identify and remove/move calibration files that do not match any raw channel.
+
+    This function finds calibration channels that are not referenced by any
+    entry in the mapping (including multiple-match candidates) and either
+    deletes or moves the corresponding files.
+
+    Args:
+        result: MappingResult from :func:`build_mapping`.
+        calibration_data: The calibration data dict returned by
+            :func:`load_calibration_data_from_single_files`.
+        cal_files_dir: Directory containing the single-channel ``.yml`` files.
+        keep_unused: If True, move unused files to *unused_dir* instead of
+            deleting them.
+        unused_dir: Destination directory for unused files when *keep_unused*
+            is True.
+
+    Returns:
+        List of Path objects for the unused files that were moved/deleted.
+    """
+    cal_files_dir = Path(cal_files_dir)
+    if unused_dir is not None:
+        unused_dir = Path(unused_dir)
+
+    # Collect all cal keys referenced by at least one raw channel
+    referenced_keys = set()
+    for channels in result.mapping_dict.values():
+        referenced_keys.update(channels.values())
+    for mm in result.multiple_matches:
+        referenced_keys.update(mm.matching_cal_keys)
+
+    # Log unused source (manufacturer) files
+    unused_channels = [
+        ch for ch in calibration_data.get('channels', [])
+        if ch.get('_calibration_file_key') not in referenced_keys
+    ]
+    if unused_channels:
+        ignored_sources = set()
+        for ch in unused_channels:
+            for src in ch.get('source_filenames', []) or []:
+                ignored_sources.add(src)
+        if ignored_sources:
+            action = "moved to unused folder" if keep_unused else "removed"
+            print(f"\n{len(ignored_sources)} manufacturer calibration file(s) "
+                  f"not matched by any raw channel ({action}):")
+            for src in sorted(ignored_sources):
+                print(f"  - {src}")
+
+    # Identify unused standardized calibration files on disk
+    referenced_filenames = {
+        f"{calibration_key_to_filename(k)}.yml" for k in referenced_keys
+    }
+    all_cal_files = sorted(cal_files_dir.glob("*.yml"))
+    unused_files = [f for f in all_cal_files if f.name not in referenced_filenames]
+
+    for f in unused_files:
+        _remove_or_move_file(f, keep_unused, unused_dir)
+
+    if unused_files:
+        if keep_unused:
+            print(f"\nMoved {len(unused_files)} unused file(s) to: {unused_dir}")
+        else:
+            print(f"\nDeleted {len(unused_files)} unused file(s).")
+
+    return unused_files
+
+
+def resolve_conflicts_interactive(
+    result: MappingResult,
+    cal_files_dir: str | Path,
+    keep_unused: bool = False,
+    unused_dir: str | Path = None,
+) -> None:
+    """Interactively resolve multiple-match conflicts by prompting the user.
+
+    When a raw channel matches more than one calibration file, this function
+    groups the conflicts, presents the options, and asks the user which file
+    to keep. Rejected files are either deleted or moved depending on
+    *keep_unused*. The *result* object is modified in-place.
+
+    Args:
+        result: MappingResult from :func:`build_mapping` (modified in-place).
+        cal_files_dir: Directory containing the single-channel ``.yml`` files.
+        keep_unused: If True, move rejected files to *unused_dir*.
+        unused_dir: Destination directory for rejected files.
+    """
+    if not result.multiple_matches:
+        return
+
+    cal_files_dir = Path(cal_files_dir)
+    if unused_dir is not None:
+        unused_dir = Path(unused_dir)
+
+    groups = defaultdict(list)
+    for mm in result.multiple_matches:
+        key = tuple(sorted(mm.matching_cal_keys))
+        groups[key].append(mm)
+
+    print("\n" + "=" * 80)
+    print("CONFLICT: MULTIPLE CALIBRATION MATCHES DETECTED")
+    print("=" * 80)
+    print(f"\n{len(groups)} unique raw configuration(s) matched multiple "
+          f"calibration files.")
+    print("You will be prompted to choose which file to keep for each conflict.\n")
+
+    keys_to_remove = set()
+
+    for conflict_num, (cal_keys, channels) in enumerate(groups.items(), start=1):
+        unique_channel_ids = sorted(set(mm.channel_id for mm in channels))
+        options = list(cal_keys)
+
+        print("-" * 60)
+        print(f"CONFLICT {conflict_num} of {len(groups)}")
+        print("-" * 60)
+        print("Affected raw channel(s):")
+        for cid in unique_channel_ids:
+            print(f"  - {cid}")
+        print("\nCalibration file options:")
+        for i, cal_key in enumerate(options, start=1):
+            cal_data = result.calibration_dict.get(cal_key, {})
+            cal_date = cal_data.get('calibration_date', 'unknown')
+            src_files = cal_data.get('source_filenames', ['unknown'])
+            print(f"  [{i}] {cal_key}.yml")
+            print(f"      calibration_date: {cal_date}  |  source: {src_files}")
+
+        while True:
+            choice = input(
+                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP (1-{len(options)}): "
+            ).strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                break
+            print(f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND {len(options)}.")
+
+        keep_idx = int(choice) - 1
+        kept_key = options[keep_idx]
+        rejected_keys = [k for k in options if k != kept_key]
+        keys_to_remove.update(rejected_keys)
+
+        print(f"\n  Keeping: {kept_key}.yml")
+        action_word = "Moving" if keep_unused else "Deleting"
+        for rk in rejected_keys:
+            print(f"  {action_word}: {rk}.yml")
+
+    # Remove/move rejected calibration files from disk
+    for cal_key in keys_to_remove:
+        fname = f"{calibration_key_to_filename(cal_key)}.yml"
+        cal_file = cal_files_dir / fname
+        if cal_file.exists():
+            _remove_or_move_file(cal_file, keep_unused, unused_dir)
+
+    # Update mapping_dict: replace rejected keys with the kept key
+    for filename in result.mapping_dict:
+        for channel_id, cal_key in list(result.mapping_dict[filename].items()):
+            if cal_key in keys_to_remove:
+                for cal_keys_tuple, mms in groups.items():
+                    affected_channels = {mm.channel_id for mm in mms}
+                    if channel_id in affected_channels:
+                        kept = [k for k in cal_keys_tuple if k not in keys_to_remove][0]
+                        result.mapping_dict[filename][channel_id] = kept
+                        break
+
+    # Remove rejected keys from calibration_dict
+    for rk in keys_to_remove:
+        result.calibration_dict.pop(rk, None)
+
+    result.multiple_matches.clear()
+
+    print("\n" + "=" * 80)
+    print("ALL CONFLICTS RESOLVED")
+    print("=" * 80)
+
+
+def check_for_conflicts(result: MappingResult, cal_files_dir: str | Path = None) -> None:
+    """Raise an error if any raw channel matched multiple calibration files.
+
+    Unlike :func:`resolve_conflicts_interactive`, this function does not
+    prompt the user. It prints the conflicting files and raises a
+    ``ValueError`` so the caller can delete the extras and re-run.
+
+    Args:
+        result: MappingResult from :func:`build_mapping`.
+        cal_files_dir: Optional path shown in the error message to tell the
+            user where to delete files.
+
+    Raises:
+        ValueError: If any raw channel has multiple calibration matches.
+    """
+    if not result.multiple_matches:
+        return
+
+    groups = defaultdict(list)
+    for mm in result.multiple_matches:
+        key = tuple(sorted(mm.matching_cal_keys))
+        groups[key].append(mm)
+
+    print("\n" + "=" * 80)
+    print("CONFLICT: MULTIPLE CALIBRATION MATCHES DETECTED")
+    print("=" * 80)
+    print(f"\n{len(groups)} unique raw configuration(s) matched multiple "
+          f"calibration files.")
+    print("Each raw configuration must match exactly ONE calibration file.")
+    if cal_files_dir:
+        print(f"Delete the unwanted file(s) from:\n  {cal_files_dir}")
+    print("Then re-run this step.\n")
+
+    for cal_keys, channels in groups.items():
+        unique_channel_ids = sorted(set(mm.channel_id for mm in channels))
+        print("-" * 60)
+        print("Conflicting calibration files (keep exactly one):")
+        for cal_key in cal_keys:
+            cal_data = result.calibration_dict.get(cal_key, {})
+            cal_date = cal_data.get('calibration_date', 'unknown')
+            src_files = cal_data.get('source_filenames', ['unknown'])
+            print(f"  - {cal_key}.yml")
+            print(f"    calibration_date: {cal_date}  |  source: {src_files}")
+        print(f"\nAffected channel ID(s):")
+        for cid in unique_channel_ids:
+            print(f"  - {cid}")
+        print()
+
+    dir_msg = f" in {cal_files_dir}" if cal_files_dir else ""
+    raise ValueError(
+        f"Found {len(groups)} unique raw configuration(s) with multiple "
+        f"calibration matches{dir_msg}. "
+        f"Delete the extras and re-run this step."
+    )
+
+
+def check_required_calibration_params(
+    calibration_dict: Dict[str, Dict[str, Any]],
+    required_params: List[str] = None,
+    environmental_direct: List[str] = None,
+    environmental_derived: List[str] = None,
+) -> Dict[str, List[str]]:
+    """Check that required calibration parameters are present for every channel.
+
+    Args:
+        calibration_dict: Maps calibration key -> calibration data dict.
+        required_params: List of required parameter names. Defaults to
+            :data:`REQUIRED_CALIBRATION_PARAMS`.
+        environmental_direct: Direct environmental parameter names. Defaults
+            to :data:`ENVIRONMENTAL_DIRECT`.
+        environmental_derived: Derived environmental parameter names. Defaults
+            to :data:`ENVIRONMENTAL_DERIVED`.
+
+    Returns:
+        Dictionary mapping calibration key -> list of missing parameter
+        descriptions. An empty dict means all parameters are present.
+    """
+    if required_params is None:
+        required_params = REQUIRED_CALIBRATION_PARAMS
+    if environmental_direct is None:
+        environmental_direct = ENVIRONMENTAL_DIRECT
+    if environmental_derived is None:
+        environmental_derived = ENVIRONMENTAL_DERIVED
+
+    print("=" * 80)
+    print("MISSING REQUIRED CALIBRATION PARAMETER CHECK")
+    print("=" * 80)
+
+    missing_by_key: Dict[str, List[str]] = {}
+
+    for cal_key, cal_data in calibration_dict.items():
+        missing = []
+
+        for param in required_params:
+            if _is_missing(cal_data.get(param)):
+                missing.append(param)
+
+        missing_direct = [p for p in environmental_direct if _is_missing(cal_data.get(p))]
+        missing_derived = [p for p in environmental_derived if _is_missing(cal_data.get(p))]
+
+        if missing_direct and missing_derived:
+            missing.extend(
+                [f"{p}  (or provide {', '.join(environmental_derived)})" for p in missing_direct]
+            )
+
+        if missing:
+            missing_by_key[cal_key] = missing
+            print(f"\n  Calibration key: {cal_key}")
+            for param in missing:
+                print(f"     - MISSING REQUIRED: {param}")
+
+    if not missing_by_key:
+        print("\n All required calibration parameters are present for every mapped channel.")
+
+    return missing_by_key
+
+
+def verify_calibration_file_usage(
+    calibration_dict: Dict[str, Dict[str, Any]],
+    cal_files_dir: str | Path,
+) -> List[Path]:
+    """Verify that every calibration file in a directory is used in the mapping.
+
+    Args:
+        calibration_dict: Maps calibration key -> calibration data dict
+            (the keys currently in use).
+        cal_files_dir: Directory containing single-channel ``.yml`` files.
+
+    Returns:
+        List of unused file Paths. An empty list means all files are used.
+    """
+    cal_files_dir = Path(cal_files_dir)
+    used_filenames = {
+        f"{calibration_key_to_filename(k)}.yml" for k in calibration_dict
+    }
+    all_cal_files = sorted(cal_files_dir.glob("*.yml"))
+    unused_files = [f for f in all_cal_files if f.name not in used_filenames]
+
+    print("=" * 80)
+    print("CALIBRATION FILE USAGE CHECK")
+    print("=" * 80)
+
+    if unused_files:
+        print(f"\n  {len(unused_files)} single-channel calibration file(s) are NOT used in the mapping:")
+        for f in unused_files:
+            print(f"     - {f.name}")
+        print(f"\n   Re-run the mapping step to resolve these.")
+    else:
+        print("\n All single-channel calibration files are used in the mapping.")
+
+    return unused_files
+
+
+def set_record_author(calibration_data: Dict[str, Any], record_author: str) -> None:
+    """Set record_author on calibration channels where it is not already set.
+
+    Args:
+        calibration_data: Calibration data dict with a ``'channels'`` key.
+        record_author: Author name to set.
+    """
+    for ch in calibration_data.get('channels', []):
+        if ch.get('record_author') is None:
+            ch['record_author'] = record_author

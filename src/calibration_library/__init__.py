@@ -27,6 +27,9 @@ from .mapping_algorithm import (
     
     # Configuration
     DEFAULT_TOLERANCES,
+    REQUIRED_CALIBRATION_PARAMS,
+    ENVIRONMENTAL_DIRECT,
+    ENVIRONMENTAL_DERIVED,
     
     # Helper functions
     values_match_with_tolerance,
@@ -48,6 +51,14 @@ from .mapping_algorithm import (
     save_mapping_files,
     save_individual_calibration_files,
     print_mapping_preview,
+    
+    # High-level pipeline functions
+    handle_unused_calibration_files,
+    resolve_conflicts_interactive,
+    check_for_conflicts,
+    check_required_calibration_params,
+    verify_calibration_file_usage,
+    set_record_author,
 )
 
 from .standardized_file_lib import (
@@ -55,6 +66,11 @@ from .standardized_file_lib import (
     build_short_filename_map,
     remap_to_short_keys,
     print_short_key_summary,
+    generate_calibration_templates,
+    validate_loaded_templates,
+    load_calibration_templates,
+    save_multi_channel_config_with_comments,
+    check_required_fields,
 )
 
 __all__ = [
@@ -68,6 +84,9 @@ __all__ = [
     
     # Configuration
     'DEFAULT_TOLERANCES',
+    'REQUIRED_CALIBRATION_PARAMS',
+    'ENVIRONMENTAL_DIRECT',
+    'ENVIRONMENTAL_DERIVED',
     
     # Helper functions
     'values_match_with_tolerance',
@@ -93,4 +112,17 @@ __all__ = [
     'save_mapping_files',
     'save_individual_calibration_files',
     'print_mapping_preview',
+    
+    # High-level pipeline functions
+    'handle_unused_calibration_files',
+    'resolve_conflicts_interactive',
+    'check_for_conflicts',
+    'check_required_calibration_params',
+    'verify_calibration_file_usage',
+    'set_record_author',
+    'generate_calibration_templates',
+    'validate_loaded_templates',
+    'load_calibration_templates',
+    'save_multi_channel_config_with_comments',
+    'check_required_fields',
 ]
