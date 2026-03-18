@@ -78,6 +78,9 @@ Changelog = "https://github.com/nmfs-ost/AA-SI_calibration/blob/main/CHANGELOG.m
 # Tool Configuration
 # =============================================================================
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
