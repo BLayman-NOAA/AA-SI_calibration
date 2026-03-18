@@ -18,8 +18,8 @@
     nmea_count: 3896
     valid_gps_count: 2064
     sentence_types:
-    - GPGGA
     - GPGLL
+    - GPGGA
   channels:
   - channel_id: GPT  38 kHz 0090720346bc 1-1 ES38B
     transceiver_id: 0090720346bc
@@ -132,8 +132,8 @@
     nmea_count: 3921
     valid_gps_count: 2064
     sentence_types:
-    - GPGGA
     - GPGLL
+    - GPGGA
   channels:
   - channel_id: GPT  38 kHz 0090720346bc 1-1 ES38B
     transceiver_id: 0090720346bc
@@ -246,8 +246,8 @@
     nmea_count: 3808
     valid_gps_count: 2066
     sentence_types:
-    - GPGGA
     - GPGLL
+    - GPGGA
   channels:
   - channel_id: GPT  38 kHz 0090720346bc 1-1 ES38B
     transceiver_id: 0090720346bc

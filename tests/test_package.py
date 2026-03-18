@@ -4,21 +4,21 @@
 Sample test file demonstrating pytest structure.
 
 Run tests with: pytest
-Run with coverage: pytest --cov=calibration_library
+Run with coverage: pytest --cov=aa_si_calibration
 """
 
-import calibration_library
+import aa_si_calibration
 
 
 def test_version_exists():
     """Test that the package has a version string."""
-    assert hasattr(calibration_library, "__version__")
-    assert isinstance(calibration_library.__version__, str)
+    assert hasattr(aa_si_calibration, "__version__")
+    assert isinstance(aa_si_calibration.__version__, str)
 
 
 def test_version_format():
     """Test that version follows semantic versioning format (X.Y.Z)."""
-    version = calibration_library.__version__
+    version = aa_si_calibration.__version__
     # Skip detailed check for dev versions (package not installed)
     if version == "0.0.0.dev":
         return
@@ -37,7 +37,7 @@ def test_version_format():
 #
 # def test_my_function():
 #     """Test description."""
-#     from calibration_library.module import my_function
+#     from aa_si_calibration.module import my_function
 #     result = my_function(input_value)
 #     assert result == expected_value
 #

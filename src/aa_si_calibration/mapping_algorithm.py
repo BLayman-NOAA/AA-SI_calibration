@@ -7,7 +7,7 @@ transceiver ID, transducer model, pulse form, frequency range, transmit power,
 and transmit duration.
 
 Example usage:
-    from calibration_library.mapping_algorithm import (
+    from aa_si_calibration.mapping_algorithm import (
         load_raw_configs, load_calibration_data, build_mapping,
         get_calibration, save_mapping_files
     )

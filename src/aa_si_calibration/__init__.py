@@ -13,7 +13,7 @@ Modules:
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("calibration_library")
+    __version__ = version("aa-si-calibration")
 except PackageNotFoundError:
     # Package is not installed (e.g., running from source without install)
     __version__ = "0.0.0.dev"

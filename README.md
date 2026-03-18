@@ -75,10 +75,10 @@ pip install -e ".[schema-docs]"
 Once installed, import directly — no `sys.path` manipulation needed:
 
 ```python
-from calibration_library.raw_reader_api import process_raw_folder, save_yaml
-from calibration_library.manufacturer_file_parsers import extract_and_convert_calibration_params
-from calibration_library.standardized_file_lib import save_single_channel_files_from_params
-from calibration_library.mapping_algorithm import (
+from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
+from aa_si_calibration.manufacturer_file_parsers import extract_and_convert_calibration_params
+from aa_si_calibration.standardized_file_lib import save_single_channel_files_from_params
+from aa_si_calibration.mapping_algorithm import (
     load_raw_configs,
     load_calibration_data_from_single_files,
     build_mapping,
@@ -102,14 +102,14 @@ pre-commit install
 
 ```bash
 pytest
-pytest --cov=calibration_library
+pytest --cov=aa_si_calibration
 ```
 
 ### Code Quality
 
 ```bash
 black src/ tests/
-pylint src/calibration_library
+pylint src/aa_si_calibration
 pre-commit run --all-files
 ```
 
@@ -135,7 +135,7 @@ python -m build
 ├── README.md
 ├── Roadmap/
 ├── src/
-│   └── calibration_library/
+│   └── aa_si_calibration/
 │       ├── __init__.py
 │       ├── calibration.py
 │       ├── constants.py

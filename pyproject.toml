@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "calibration_library"
+name = "aa-si-calibration"
 version = "0.1.0"
 description = "Calibration routines, standardized formats, and tools for reading and evaluating sonar calibration data for NOAA Fisheries AA-SI."
 readme = "README.md"
@@ -85,7 +85,7 @@ include = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/calibration_library"]
+packages = ["src/aa_si_calibration"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -97,7 +97,7 @@ addopts = [
 ]
 
 [tool.coverage.run]
-source = ["src/calibration_library"]
+source = ["src/aa_si_calibration"]
 branch = true
 
 [tool.coverage.report]

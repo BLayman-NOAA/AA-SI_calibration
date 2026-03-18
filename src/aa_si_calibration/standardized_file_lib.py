@@ -1786,7 +1786,7 @@ def generate_calibration_templates(
 
     Args:
         unique_channels: Dictionary mapping channel_key -> channel_data
-            (as returned by :func:`~calibration_library.raw_reader_api.extract_unique_channels`).
+            (as returned by :func:`~aa_si_calibration.raw_reader_api.extract_unique_channels`).
         calibration_date: Calibration date string (``YYYY-MM-DD``).
         record_author: Author name to embed in each template.
         output_dir: Directory to write the individual ``.yml`` files.

@@ -30,7 +30,7 @@
 #
 # =============================================================================
 
-record_created: "2026-03-17T22:40:49.743459+00:00" # automatically populated when record is created
+record_created: "2026-03-18T18:45:09.853176+00:00" # automatically populated when record is created
 record_author: "Placeholder Author" # Name of person or organization who authored this file
 channel: "WBT 400479-15 ES18_ES"  # Channel identifier
 transceiver_id: "400479"  # [MAPPING] Transceiver ID for matching

@@ -30,24 +30,24 @@
 #
 # =============================================================================
 
-record_created: "2026-03-17T22:40:49.743459+00:00" # automatically populated when record is created
+record_created: "2026-03-18T18:45:09.853176+00:00" # automatically populated when record is created
 record_author: "Placeholder Author" # Name of person or organization who authored this file
-channel: "WBT 400503-15 ES70-7C_ES"  # Channel identifier
-transceiver_id: "400503"  # [MAPPING] Transceiver ID for matching
+channel: "WBT 400517-15 ES120-7C_ES"  # Channel identifier
+transceiver_id: "400517"  # [MAPPING] Transceiver ID for matching
 transceiver_model: "WBT"  # Transceiver model
-transceiver_ethernet_address: "009072061c77"
-transceiver_serial_number: "400503"
-transceiver_number: 3
+transceiver_ethernet_address: "009072061c85"
+transceiver_serial_number: "400517"
+transceiver_number: 4
 transceiver_port: 15
 channel_instance_number: 1
-transducer_model: "ES70-7C"  # [MAPPING] Transducer model for matching
+transducer_model: "ES120-7C"  # [MAPPING] Transducer model for matching
 transducer_serial_number: null # [MAPPING] Note: ideally this field is provided for mapping, but will be ignored if missing.
 pulse_form: "0"  # [MAPPING] Pulse form (0=CW, 1=FM) for matching
-frequency_start: 70000.0  # [MAPPING] Start frequency for matching
-frequency_end: 70000.0  # [MAPPING] End frequency for matching
-frequency: [70000.0]
-nominal_transducer_frequency: 70000.0  # Nominal CW operating frequency of transducer (Hz)
-transmit_power: 750.0  # [MAPPING] Transmit power for matching
+frequency_start: 120000.0  # [MAPPING] Start frequency for matching
+frequency_end: 120000.0  # [MAPPING] End frequency for matching
+frequency: [120000.0]
+nominal_transducer_frequency: 120000.0  # Nominal CW operating frequency of transducer (Hz)
+transmit_power: 250.0  # [MAPPING] Transmit power for matching
 transmit_duration_nominal: 0.001024  # [MAPPING] Pulse duration for matching
 multiplexing_found: false
 
