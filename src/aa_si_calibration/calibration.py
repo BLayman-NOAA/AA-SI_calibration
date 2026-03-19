@@ -1117,7 +1117,16 @@ def sv_difference_summary_stats_plot(ds_Sv_baseline, ds_Sv_calibrated, title):
         freq_diff = sv_diff_data.isel(channel=freq_idx)
         valid_diff = freq_diff.values[~np.isnan(freq_diff.values)].flatten()
         
-        ax2.hist(valid_diff, bins=50, alpha=0.6, label=freq_label, color=color, density=True)
+        data_range = np.ptp(valid_diff) if len(valid_diff) > 0 else 0
+        if len(valid_diff) == 0 or data_range == 0:
+            ax2.axvline(x=valid_diff[0] if len(valid_diff) > 0 else 0,
+                        color=color, alpha=0.6, label=f'{freq_label} (constant)')
+        else:
+            # Compute safe number of bins: ensure each bin spans at least
+            # a representable float width to avoid "too many bins" errors
+            max_bins = max(1, int(data_range / (np.finfo(float).eps * max(1, abs(valid_diff.mean())) * 1e6)))
+            n_bins = min(50, max_bins)
+            ax2.hist(valid_diff, bins=n_bins, alpha=0.6, label=freq_label, color=color, density=True)
 
     ax2.set_xlabel('Sv Difference (CAL - Baseline) (dB)', fontsize=12)
     ax2.set_ylabel('Probability Density', fontsize=12)
