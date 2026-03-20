@@ -325,6 +325,14 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                         except Exception as e:
                             print(f"      Unexpected error in beam model section: {e}")
                 
+                # Derive transducer model from the Transceiver (channel_id) string
+                # as the last whitespace-separated token, consistent with raw_reader_api.
+                # e.g. "GPT  38 kHz 0090720346bc 1-1 ES38B" -> "ES38B"
+                if 'Transceiver' in cal_params:
+                    channel_id_parts = cal_params['Transceiver'].split()
+                    if channel_id_parts:
+                        cal_params['Transducer'] = channel_id_parts[-1]
+
                 # Store calibration data by frequency
                 if 'frequency' in cal_params:
                     freq_key = f"{cal_params['frequency']/1000:.0f}kHz"

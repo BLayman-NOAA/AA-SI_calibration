@@ -8,7 +8,27 @@ import json
 import os
 import re
 
-
+from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
+from aa_si_calibration import manufacturer_file_parsers
+from aa_si_calibration import standardized_file_lib
+from aa_si_calibration.mapping_algorithm import (
+    load_raw_configs,
+    load_calibration_data_from_single_files,
+    build_mapping,
+    save_mapping_files,
+    print_mapping_preview,
+    handle_unused_calibration_files,
+    resolve_conflicts_interactive,
+    check_for_conflicts,
+    check_required_calibration_params,
+    verify_calibration_file_usage,
+)
+from aa_si_calibration.standardized_file_lib import (
+    remap_to_short_keys,
+    print_short_key_summary,
+    calibration_key_to_filename,
+)
+import yaml
 
 
 
@@ -344,6 +364,198 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
     }
 
 
+def extract_standardized_calibration_parameters(
+    calibration_dict, mapping_dict, filename=None, echodata=None,
+):
+    """Extract standardized calibration parameters in the comparison format.
+
+    Reverses the per-channel standardized format stored in *calibration_dict*
+    back into the ``(cal_params, env_params, other_params)`` structure used by
+    :func:`comparison.run_full_calibration_comparison` and
+    :func:`print_calibration_values`.
+
+    This is the inverse of
+    :func:`standardized_file_lib.convert_params_to_standardized_names`.
+
+    Args:
+        calibration_dict: ``{cal_key: {standardized_param: value, …}, …}``
+            as returned by :func:`generate_standardized_cal_mapping`.
+        mapping_dict: ``{filename: {channel_id: cal_key, …}, …}``
+            as returned by :func:`generate_standardized_cal_mapping`.
+        filename: Raw filename whose channels to extract.  If *None*, the
+            first filename in *mapping_dict* is used.
+        echodata: Optional EchoData object.  If provided, channel ordering
+            is taken from ``echodata["Sonar/Beam_group1"].channel.values``
+            to guarantee alignment with echopype arrays.
+
+    Returns:
+        dict with keys ``cal_params``, ``env_params``, ``other_params``.
+    """
+    if filename is None:
+        filename = next(iter(mapping_dict))
+
+    file_channels = mapping_dict[filename]
+
+    # Determine channel ordering
+    if echodata is not None:
+        ordered_channel_ids = list(echodata["Sonar/Beam_group1"].channel.values)
+    else:
+        ordered_channel_ids = list(file_channels.keys())
+
+    # Collect per-channel standardized data
+    channel_data_list = []
+    for channel_id in ordered_channel_ids:
+        cal_key = file_channels.get(channel_id)
+        if cal_key is None:
+            raise ValueError(
+                f"Channel '{channel_id}' not found in mapping for '{filename}'"
+            )
+        cal_data = calibration_dict.get(cal_key)
+        if cal_data is None:
+            raise ValueError(
+                f"Calibration key '{cal_key}' not found in calibration_dict"
+            )
+        channel_data_list.append(cal_data)
+
+    def _unwrap(value):
+        """Unwrap single-element list/tuple to scalar."""
+        if isinstance(value, (list, tuple)) and len(value) == 1:
+            return value[0]
+        return value
+
+    def _collect(std_key):
+        """Collect a per-channel field into a list, unwrapping arrays."""
+        return [_unwrap(cd.get(std_key)) for cd in channel_data_list]
+
+    def _scalar(std_key):
+        """Get a scalar field from the first channel."""
+        return _unwrap(channel_data_list[0].get(std_key)) if channel_data_list else None
+
+    # Reverse mapping from standardized names to comparison format names.
+    # See convert_params_to_standardized_names for the forward direction.
+    cal_params = {
+        "gain_correction": _collect("gain_correction"),
+        "sa_correction": _collect("sa_correction"),
+        "equivalent_beam_angle": _collect("equivalent_beam_angle"),
+        "beamwidth_athwartship": _collect("beamwidth_transmit_major"),
+        "beamwidth_alongship": _collect("beamwidth_transmit_minor"),
+        "angle_offset_athwartship": _collect("echoangle_major"),
+        "angle_offset_alongship": _collect("echoangle_minor"),
+        "angle_sensitivity_athwartship": _collect("echoangle_major_sensitivity"),
+        "angle_sensitivity_alongship": _collect("echoangle_minor_sensitivity"),
+    }
+
+    env_params = {
+        "sound_speed": _scalar("sound_speed_indicative"),
+        "sound_absorption": _collect("absorption_indicative"),
+    }
+
+    other_params = {
+        "channel": ordered_channel_ids,
+        "frequency_nominal": _collect("frequency"),
+        "transmit_duration_nominal": _collect("transmit_duration_nominal"),
+        "transmit_power": _collect("transmit_power"),
+        "transmit_bandwidth": _collect("transmit_bandwidth"),
+        "sample_interval": _collect("sample_interval"),
+        "source_filenames_across_channels": (
+            channel_data_list[0].get("source_filenames") if channel_data_list else None
+        ),
+        "source_file_type": (
+            channel_data_list[0].get("source_file_type") if channel_data_list else None
+        ),
+    }
+
+    return {
+        "cal_params": cal_params,
+        "env_params": env_params,
+        "other_params": other_params,
+    }
+
+
+def load_standardized_calibration_parameters(
+    output_base,
+    filename=None,
+    echodata=None,
+    single_cal_subdir="single_channel_calibration_files",
+    mapping_subdir="mapping_files",
+    mapping_filename="channel_to_calibration_mapping.yaml",
+):
+    """Load standardized calibration files and return comparison-format parameters.
+
+    Reads the mapping YAML and single-channel calibration ``.yml`` files from
+    the pipeline output directory, reconstructs ``calibration_dict`` and
+    ``mapping_dict``, and converts them to the ``(cal_params, env_params,
+    other_params)`` structure used by
+    :func:`comparison.run_full_calibration_comparison`.
+
+    This is a convenience wrapper around
+    :func:`extract_standardized_calibration_parameters` for use in a fresh
+    session where ``generate_standardized_cal_mapping`` has not been run.
+
+    Args:
+        output_base: Root output directory produced by the pipeline (the same
+            path passed as *output_base* to
+            :func:`generate_standardized_cal_mapping`).
+        filename: Raw filename whose channels to extract.  If *None*, the
+            first filename in the mapping is used.
+        echodata: Optional EchoData object used to guarantee channel ordering
+            alignment with echopype arrays.
+        single_cal_subdir: Name of the subdirectory containing single-channel
+            ``.yml`` files (default ``"single_channel_calibration_files"``).
+        mapping_subdir: Name of the subdirectory containing the mapping YAML
+            (default ``"mapping_files"``).
+        mapping_filename: Name of the mapping YAML file
+            (default ``"channel_to_calibration_mapping.yaml"``).
+
+    Returns:
+        dict with keys:
+            - ``cal_params``: Calibration parameters.
+            - ``env_params``: Environmental parameters.
+            - ``other_params``: Other parameters.
+            - ``mapping_dict``: The loaded mapping dictionary.
+            - ``calibration_dict``: The reconstructed calibration dictionary.
+    """
+    output_base = Path(output_base)
+    cal_files_dir = output_base / single_cal_subdir
+    mapping_path = output_base / mapping_subdir / mapping_filename
+
+    if not mapping_path.exists():
+        raise FileNotFoundError(f"Mapping file not found: {mapping_path}")
+    if not cal_files_dir.exists():
+        raise FileNotFoundError(
+            f"Single-channel calibration directory not found: {cal_files_dir}"
+        )
+
+    # Load the mapping dictionary
+    with open(mapping_path, "r", encoding="utf-8") as f:
+        mapping_dict = yaml.safe_load(f)
+
+    # Collect all unique calibration keys referenced by the mapping
+    cal_keys = set()
+    for channels in mapping_dict.values():
+        cal_keys.update(channels.values())
+
+    # Load each referenced single-channel calibration file
+    calibration_dict = {}
+    for cal_key in cal_keys:
+        cal_file = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yml"
+        if not cal_file.exists():
+            raise FileNotFoundError(
+                f"Calibration file not found for key '{cal_key}': {cal_file}"
+            )
+        with open(cal_file, "r", encoding="utf-8") as f:
+            calibration_dict[cal_key] = yaml.safe_load(f)
+
+    # Convert to comparison format
+    result = extract_standardized_calibration_parameters(
+        calibration_dict, mapping_dict, filename=filename, echodata=echodata,
+    )
+
+    result["mapping_dict"] = mapping_dict
+    result["calibration_dict"] = calibration_dict
+    return result
+
+
 def print_calibration_values(echodata, env_params, cal_params, other_params, title="Calibration Values"):
     """Print formatted calibration parameters with appropriate units and formatting.
     
@@ -508,634 +720,199 @@ def print_calibration_values(echodata, env_params, cal_params, other_params, tit
     printValues("sa_correction", sa_correction, sa_correction_units)
 
 
-def calculate_full_dataset_effect(ds_modified, ds_baseline, parameter_name, output_logs_folder, thresholds=None):
-    """Calculate the statistical effect of a calibration parameter across the entire dataset.
-    
-    Computes statistics on the difference between modified and baseline Sv datasets,
-    providing comprehensive analysis of how a calibration parameter affects the data.
-    
+
+def generate_standardized_cal_mapping(
+    raw_input_folder,
+    cal_input_folder,
+    output_base,
+    global_params,
+    short_filenames=True,
+    keep_unused=True,
+    conflict_resolution="error",
+    verbose=True,
+):
+    """Run the full calibration pipeline: raw config extraction, calibration
+    standardization, channel-to-calibration mapping, and verification.
+
+    Steps performed:
+      1. Read raw file configurations and save to YAML.
+      2. Parse manufacturer calibration files (EK60/EK80), validate, and save
+         each channel as an individual single-channel .yml file.
+      3. Load single-channel files, match raw channels to calibration data,
+         handle unused files, resolve conflicts, and save mapping files.
+      4. Verify that all required calibration parameters are present and that
+         every remaining single-channel file is referenced by the mapping.
+
     Args:
-        ds_modified: Sv dataset with modified calibration parameter
-        ds_baseline: Baseline Sv dataset for comparison
-        parameter_name (str): Name of the parameter being analyzed for display
-        output_logs_folder: Path to folder for saving log files
-        
+        raw_input_folder: Path to folder containing .raw files.
+        cal_input_folder: Path to folder containing manufacturer calibration
+            files (.cal for EK60 or .xml for EK80).
+        output_base: Path to the root output directory.  Subdirectories for
+            raw configs, single-channel files, mapping files, logs, and
+            (optionally) unused calibration files will be created beneath it.
+        global_params: Dict of global parameters applied to every single-channel
+            file (e.g. ``{"cruise_id": "...", "record_author": "..."}``).
+        short_filenames: If True, use compact filenames for single-channel
+            calibration files and mapping keys (default True).
+        keep_unused: If True, unused/rejected calibration files are moved to
+            an ``unused_calibration_files`` subfolder instead of being deleted
+            (default True).
+        conflict_resolution: Strategy when a raw channel matches multiple
+            calibration files.  ``"interactive"`` prompts the user to choose;
+            ``"error"`` raises a ValueError listing the conflicts (default).
+        verbose: If True, print progress information (default True).
+
     Returns:
-        dict: Dictionary with frequency keys containing statistical results:
-              - mean: Mean difference in dB
-              - median: Median difference in dB
-              - max_abs: Maximum absolute difference in dB
-              - percentile_95: 95th percentile of absolute differences
-              - n_valid: Number of valid data points
+        dict with keys:
+            - mapping_dict: {filename: {channel_id: cal_key, ...}, ...}
+            - calibration_dict: {cal_key: {param: value, ...}, ...}
+            - result: The MappingResult object from build_mapping.
+            - missing_params: Dict of calibration keys with missing required
+              parameters (empty dict means all present).
+            - unused_files: List of Path objects for calibration files not
+              referenced by the mapping (empty list means all used).
     """
+    raw_input_folder = Path(raw_input_folder)
+    cal_input_folder = Path(cal_input_folder)
+    output_base = Path(output_base)
 
-    default_thresholds = {
-                    "critical_median": 2.0,
-                    "large_median": 1.0,
-                    "moderate_median": 0.5,
-                    "critical_max": 4.0,
-                    "large_max": 2.0,
-                    "moderate_max": 1.0
-                }
+    # Create output subdirectories
+    raw_configs_output = output_base / "raw_file_configs"
+    single_cal_output = output_base / "single_channel_calibration_files"
+    mapping_output = output_base / "mapping_files"
+    unused_cal_output = output_base / "unused_calibration_files"
+    logs_output = output_base / "logs"
 
-    if not thresholds:
-        thresholds = default_thresholds
+    for folder in [raw_configs_output, single_cal_output, mapping_output, logs_output]:
+        folder.mkdir(parents=True, exist_ok=True)
+
+    if keep_unused:
+        unused_cal_output.mkdir(parents=True, exist_ok=True)
+
+    raw_configs_path = raw_configs_output / "raw_file_configs.yaml"
+
+    # If single-channel calibration files already exist, skip Steps 1-2.
+    # This allows the "error" conflict-resolution workflow: after a conflict
+    # is raised, the user deletes the unwanted file(s) and re-runs the cell
+    # without Steps 1-2 regenerating them.
+    existing_cal_files = list(single_cal_output.glob("*.yml"))
+    if existing_cal_files:
+        if verbose:
+            print(f"Found {len(existing_cal_files)} existing single-channel calibration "
+                  f"file(s) in {single_cal_output} — skipping Steps 1-2.")
     else:
-        for key, default_value in default_thresholds.items():
-            thresholds.setdefault(key, default_value)
-    
-    # Ensure output folder exists
-    os.makedirs(output_logs_folder, exist_ok=True)
-    
-    # Load or create calibration flags JSON
-    flags_file = Path(output_logs_folder) / "calibration_flags.json"
-    if flags_file.exists():
-        with open(flags_file, 'r') as f:
-            flags = json.load(f)
+        # ── STEP 1: Read raw file configurations ─────────────────────────
+        file_configs, frequencies_set = process_raw_folder(raw_input_folder, verbose=verbose)
+        save_yaml(file_configs, raw_configs_path)
+        if verbose:
+            print(f"\nSaved raw file configurations to: {raw_configs_path}")
+
+        # ── STEP 2: Parse manufacturer calibration files ─────────────────
+        cal_params, env_params, other_params, cal_file_type = \
+            manufacturer_file_parsers.extract_and_convert_calibration_params(
+                cal_input_folder,
+                nc_frequencies=frequencies_set,
+                output_logs_folder=logs_output,
+            )
+
+        if verbose:
+            print("\n" + "=" * 80)
+            print(f"Parsed {cal_file_type} calibration parameters summary:")
+            print("=" * 80)
+            print(f"Channels: {other_params.get('channel')}")
+            print(f"Frequencies: {other_params.get('frequency_nominal')}")
+            print(f"Gain corrections: {cal_params.get('gain_correction')}")
+            print(f"Sa corrections: {cal_params.get('sa_correction')}")
+            print(f"Equivalent beam angles: {cal_params.get('equivalent_beam_angle')}")
+
+        # Save as single-channel files
+        saved_count, _, standardized_dict = standardized_file_lib.save_single_channel_files_from_params(
+            cal_params,
+            env_params,
+            other_params,
+            global_params,
+            output_dir=single_cal_output,
+            short_filenames=short_filenames,
+        )
+
+        if verbose:
+            print(f"\nSaved {saved_count} single-channel calibration file(s) to: {single_cal_output}")
+            print("\n" + "=" * 80)
+            print("Single-channel calibration files:")
+            print("=" * 80)
+            for f in sorted(single_cal_output.glob("*.yml")):
+                size_kb = f.stat().st_size / 1024
+                print(f"  {f.name} ({size_kb:.1f} KB)")
+
+    # ── STEP 3: Load configs, build mapping, save ────────────────────────
+    raw_file_configs = load_raw_configs(raw_configs_path)
+
+    if verbose:
+        print(f"\nLoaded {len(raw_file_configs)} raw file configurations")
+        print(f"Raw files: {[f['filename'] for f in raw_file_configs]}")
+
+    calibration_data = load_calibration_data_from_single_files(single_cal_output)
+
+    if verbose:
+        print(f"Loaded {len(calibration_data['channels'])} calibration channel(s) "
+              f"from {single_cal_output}")
+
+    result = build_mapping(raw_file_configs, calibration_data, verbose=verbose)
+    result.print_summary()
+
+    # Handle unused calibration files
+    handle_unused_calibration_files(
+        result, calibration_data, single_cal_output,
+        keep_unused=keep_unused,
+        unused_dir=unused_cal_output,
+    )
+
+    # Resolve conflicts
+    if conflict_resolution == "interactive":
+        resolve_conflicts_interactive(
+            result, single_cal_output,
+            keep_unused=keep_unused,
+            unused_dir=unused_cal_output,
+        )
+    elif conflict_resolution == "error":
+        check_for_conflicts(result, cal_files_dir=single_cal_output)
     else:
-        flags = {
-            "moderate_impacts": [],
-            "large_impacts": [],
-            "critical_impacts": [],
-            "data_irregularities": [],
-            "missing_parameters": []
-        }
-    
-    # Calculate difference across all data
-    diff_data = ds_modified['Sv'] - ds_baseline['Sv']
-    
-    print(f"\n {parameter_name.upper()}")
-    print("="*60)
-    print("Freq     | Mean Effect | Median Effect | Max Absolute Effect | Absolute 95th %ile | Valid Points")
-    print("-" * 78)
-    
-    results = {}
-    for freq_hz, channel in zip(ds_baseline["frequency_nominal"].values, ds_baseline["channel"].values):
-        freq_key = f"{freq_hz/1000:.0f}kHz"
-        
-        # Get all valid differences for this frequency
-        freq_diff = diff_data.sel(channel=channel)
-        valid_diffs = freq_diff.values[~np.isnan(freq_diff.values)]
-        
-        if len(valid_diffs) > 0:
-            stats = {
-                'mean': np.mean(valid_diffs),
-                'median': np.median(valid_diffs),
-                'max_abs': np.max(np.abs(valid_diffs)),
-                'percentile_95': np.percentile(np.abs(valid_diffs), 95),
-                'n_valid': len(valid_diffs)
-            }
-            
-            results[freq_key] = stats
-            print(f"{freq_key:>7} | {stats['mean']:+12.3f} | {stats['median']:+12.3f} | {stats['max_abs']:+20.3f} | {stats['percentile_95']:+18.3f} | {stats['n_valid']:>11,}")
-            
-            # Check thresholds and log impacts
-            median_abs = stats['median']
-            max_abs = stats['max_abs']
+        raise ValueError(
+            f"Unknown conflict_resolution mode: {conflict_resolution!r}. "
+            f"Use 'interactive' or 'error'."
+        )
 
-            median_json_object = {
-                "parameter_name": parameter_name,
-                "frequency": int(freq_hz),
-                "metric": "median",
-                "sv_change": round(stats['median'], 3)
-            }
+    mapping_dict = result.mapping_dict
+    calibration_dict = result.calibration_dict
 
-            max_json_object = {
-                "parameter_name": parameter_name,
-                "frequency": int(freq_hz),
-                "metric": "max_abs",
-                "sv_change": round(stats['max_abs'], 3)
-            }
+    # Preview and save mapping files
+    print_mapping_preview(result)
 
-            # Median difference thresholds
-            if median_abs > thresholds["critical_median"]:
-                flags["critical_impacts"].append(median_json_object)
-            elif median_abs > thresholds["large_median"]:
-                flags["large_impacts"].append(median_json_object)
-            elif median_abs > thresholds["moderate_median"]:
-                flags["moderate_impacts"].append(median_json_object)
-            
-            # Max absolute difference thresholds
-            if max_abs > thresholds["critical_max"]:
-                flags["critical_impacts"].append(max_json_object)
-            elif max_abs > thresholds["large_max"]:
-                flags["large_impacts"].append(max_json_object)
-            elif max_abs > thresholds["moderate_max"]:
-                flags["moderate_impacts"].append(max_json_object)
+    mapping_path, calibration_path = save_mapping_files(
+        result, mapping_output, short_filenames=short_filenames,
+    )
 
-        else:
-            print(f"{freq_key:>7} | No valid data")
-            results[freq_key] = None
-    
-    # Save updated flags to JSON
-    with open(flags_file, 'w') as f:
-        json.dump(flags, f, indent=2)
-    
-    print("\n"*2)
-    return results
+    if verbose:
+        print(f"\nSaved mapping dictionary to: {mapping_path}")
+        print(f"Saved calibration dictionary to: {calibration_path}")
+        print(f"\nNote: Single-channel calibration files already exist in: {single_cal_output}")
 
+    if short_filenames:
+        mapping_dict, calibration_dict, short_map = remap_to_short_keys(
+            mapping_dict, calibration_dict,
+        )
+        print_short_key_summary(short_map, result.calibration_dict)
 
-def verify_additive_effects(gain_results, sa_results, eba_results, sound_speed_results, absorption_results, combined_results):
-    """
-    Verify that individual parameter effects add up to the combined effect.
-    
-    Parameters:
-    -----------
-    gain_results : dict
-        Results from gain correction effect calculation
-    sa_results : dict  
-        Results from SA correction effect calculation
-    eba_results : dict
-        Results from equivalent beam angle effect calculation
-    sound_speed_results : dict
-        Results from sound speed effect calculation
-    absorption_results : dict
-        Results from absorption effect calculation
-    combined_results : dict
-        Results from combined effect calculation
-        
-    Returns:
-    --------
-    verification_results : dict
-        Dictionary containing verification statistics for each frequency
-    """
-    
-    print("="*80)
-    print("\nVERIFICATION: DO INDIVIDUAL EFFECTS ADD UP TO COMBINED EFFECT?")
-    print("="*80)
-    print()
-    
-    verification_results = {}
-    
-    # Get all frequency keys from combined results
-    freq_keys = [key for key in combined_results.keys() if combined_results[key] is not None]
-    
-    if not freq_keys:
-        print("No valid frequency data found in combined results.")
-        return verification_results
-    
-    print("Frequency | Individual Sum | Combined Effect | Difference | Percent Error")
-    print("-" * 75)
-    
-    for freq_key in freq_keys:
-        try:
-            # Extract mean effects for this frequency from each parameter
-            individual_effects = []
-            effect_names = []
-            
-            # Check each individual result and collect valid effects
-            if gain_results.get(freq_key) is not None:
-                individual_effects.append(gain_results[freq_key]['mean'])
-                effect_names.append('gain')
-            
-            if sa_results.get(freq_key) is not None:
-                individual_effects.append(sa_results[freq_key]['mean'])
-                effect_names.append('sa')
-                
-            if eba_results.get(freq_key) is not None:
-                individual_effects.append(eba_results[freq_key]['mean'])
-                effect_names.append('eba')
-                
-            if sound_speed_results.get(freq_key) is not None:
-                individual_effects.append(sound_speed_results[freq_key]['mean'])
-                effect_names.append('sound_speed')
-                
-            if absorption_results.get(freq_key) is not None:
-                individual_effects.append(absorption_results[freq_key]['mean'])
-                effect_names.append('absorption')
-            
-            # Calculate sum of individual effects
-            individual_sum = sum(individual_effects)
-            
-            # Get combined effect
-            combined_effect = combined_results[freq_key]['mean']
-            
-            # Calculate difference and percent error
-            difference = combined_effect - individual_sum
-            percent_error = (difference / combined_effect * 100) if combined_effect != 0 else float('inf')
-            
-            # Store results
-            verification_results[freq_key] = {
-                'individual_sum': individual_sum,
-                'combined_effect': combined_effect,
-                'difference': difference,
-                'percent_error': percent_error,
-                'individual_effects': dict(zip(effect_names, individual_effects)),
-                'n_individual_params': len(individual_effects)
-            }
-            
-            # Print results
-            print(f"{freq_key:>8} | {individual_sum:+13.3f} | {combined_effect:+14.3f} | {difference:+10.3f} | {percent_error:+12.2f}%")
-            
-        except Exception as e:
-            print(f"{freq_key:>8} | Error: {e}")
-            verification_results[freq_key] = None
-    
-    print()
-    
-    # Summary analysis
-    valid_verifications = [v for v in verification_results.values() if v is not None]
-    
-    if valid_verifications:
-        avg_percent_error = np.mean([abs(v['percent_error']) for v in valid_verifications])
-        max_percent_error = max([abs(v['percent_error']) for v in valid_verifications])
-        
-        print("SUMMARY:")
-        print(f"  Average absolute percent error: {avg_percent_error:.2f}%")
-        print(f"  Maximum absolute percent error: {max_percent_error:.2f}%")
-        
-        # Determine if effects are approximately additive
-        tolerance = 5.0  # 5% tolerance
-        if max_percent_error <= tolerance:
-            print(f"  VERIFICATION PASSED: Effects are approximately additive (within {tolerance}% tolerance)")
-        else:
-            print(f"  VERIFICATION FAILED: Effects are NOT approximately additive (exceeds {tolerance}% tolerance)")
-            
-        print()
-        
-        # Detailed breakdown for frequencies with significant errors
-        significant_errors = [freq for freq, v in verification_results.items() 
-                            if v is not None and abs(v['percent_error']) > tolerance]
-        
-        if significant_errors:
-            print("FREQUENCIES WITH SIGNIFICANT NON-ADDITIVE BEHAVIOR:")
-            for freq_key in significant_errors:
-                v = verification_results[freq_key]
-                print(f"  {freq_key}:")
-                print(f"    Combined effect: {v['combined_effect']:+.3f} dB")
-                print(f"    Individual sum:  {v['individual_sum']:+.3f} dB")
-                print(f"    Difference:      {v['difference']:+.3f} dB ({v['percent_error']:+.2f}%)")
-                print(f"    Individual breakdown:")
-                for param, effect in v['individual_effects'].items():
-                    print(f"      {param}: {effect:+.3f} dB")
-                print()
-    else:
-        print("No valid verification data available.")
-    
-    print("="*80)
-    print()
-    
-    return verification_results
+    # ── Verification ─────────────────────────────────────────────────────
+    missing_params = check_required_calibration_params(calibration_dict)
+    unused_files = verify_calibration_file_usage(calibration_dict, single_cal_output)
 
-
-def compare_calibration_parameters(report_cal_params, report_env_params, report_other_params, original_cal_params, original_env_params, original_other_params, echodata):
-    """Compare calibration parameters between .cal file and original netCDF values."""
-    
-    # Define units and formatting for all parameters
-    units = {
-        "sound_speed": echodata["Environment"].sound_speed_indicative[0][0].units,
-        "sound_absorption": echodata["Environment"].absorption_indicative[0][0].units,
-        "equivalent_beam_angle": "dB re sr",
-        "gain_correction": echodata["Sonar/Beam_group1"].gain_correction.units,
-        "sa_correction": "dB",
-        "beamwidth_athwartship": "deg",
-        "beamwidth_alongship": "deg",
-        "angle_offset_athwartship": "deg",
-        "angle_offset_alongship": "deg",
-        "angle_sensitivity_athwartship": "unitless",
-        "angle_sensitivity_alongship": "unitless",
-        "transmit_power": echodata["Sonar/Beam_group1"]["transmit_power"][0][0].units,
-        "transmit_bandwidth": echodata["Sonar/Beam_group1"]["transmit_bandwidth"][0][0].units,
-        "sample_interval": echodata["Sonar/Beam_group1"]["sample_interval"][0][0].units,
-        "transmit_duration_nominal": echodata["Sonar/Beam_group1"]["transmit_duration_nominal"][0][0].units
+    return {
+        "mapping_dict": mapping_dict,
+        "calibration_dict": calibration_dict,
+        "result": result,
+        "missing_params": missing_params,
+        "unused_files": unused_files,
     }
-    
-    formatting = {
-        "sound_speed": 1, "sound_absorption": 6, "equivalent_beam_angle": 1,
-        "gain_correction": 4, "sa_correction": None, "beamwidth_athwartship": 2,
-        "beamwidth_alongship": 2, "angle_offset_athwartship": 2, "angle_offset_alongship": 2,
-        "angle_sensitivity_athwartship": 2, "angle_sensitivity_alongship": 2,
-        "transmit_power": 1, "transmit_bandwidth": 1, "sample_interval": 6, "transmit_duration_nominal": 6
-    }
-    
-    def extract_values(val):
-        """Extract values from various data types."""
-        if hasattr(val, 'values'):
-            val = val.values
-        if isinstance(val, np.ndarray):
-            return val.flatten()
-        elif hasattr(val, '__iter__') and not isinstance(val, str):
-            return np.array(list(val))
-        else:
-            return np.array([val])
-    
-    def format_value(value, param_name):
-        """Format value based on parameter type."""
-        decimals = formatting.get(param_name)
-        return round(value, decimals) if decimals is not None else value
-    
-    def create_channel_table(file_vals, orig_vals, param_name, channels, units_str):
-        """Create a table format for multi-channel parameters."""
-        max_len = max(len(file_vals), len(orig_vals))
-        headers = []
-        col_width = 12
 
-        if max_len > 1:
-            # Create column headers
-            for i in range(max_len):
-                if i < len(channels):
-                    parts = str(channels[i]).split()
-                    headers.append(f"{parts[0]} {parts[1]} {parts[2]}" if len(parts) >= 3 else str(channels[i])[:12])
-                else:
-                    headers.append(f"Ch{i+1}")
-            
-            col_width = max(max(len(h) for h in headers), 12)
-        
-        # Print table
-        rows = [
-            ("", headers),
-            ("-"*20, ["-"*col_width]*max_len),
-            ("Original (.nc)", [format_value(float(orig_vals[i]), param_name) if i < len(orig_vals) else "Missing" for i in range(max_len)]),
-            ("Report (.cal)", [format_value(float(file_vals[i]), param_name) if i < len(file_vals) else "Missing" for i in range(max_len)]),  # Apply formatting here too
-            ("Difference", [format_value(round(float(file_vals[i]) - float(orig_vals[i]), 10), param_name) if i < min(len(file_vals), len(orig_vals)) else "--" for i in range(max_len)]),
-            ("Percent Change (%)", []),
-            ("Units", [units_str]*max_len)
-        ]
-        
-        # Calculate percent changes
-        for i in range(max_len):
-            if i < len(file_vals) and i < len(orig_vals):
-                file_val, orig_val = float(file_vals[i]), float(orig_vals[i])
-                if abs(orig_val) < 1e-8:
-                    rows[5][1].append("NA")
-                else:
-                    percent_change = ((file_val - orig_val) / orig_val) * 100
-                    if np.isinf(percent_change) or np.isnan(percent_change) or abs(percent_change) > 1e4:
-                        rows[5][1].append("NA")
-                    elif abs(percent_change) < 0.01:
-                        rows[5][1].append("0.00%")
-                    else:
-                        rows[5][1].append(f"{percent_change:.2f}%")
-            else:
-                rows[5][1].append("--")
-        
-        # Print formatted table
-        for label, values in rows:
-            print(f"  {label:20}", end="")
-            for val in values:
-                print(f"{val:>{col_width}}", end="  ")
-            print()
-
-    print("="*80)
-    print("CALIBRATION PARAMETER COMPARISON")
-    print("="*80)
-    print()
-    
-    # Define parameters to compare
-    comparisons = [
-        ("sound_speed", report_env_params, original_env_params, "Environmental"),
-        ("sound_absorption", report_env_params, original_env_params, "Environmental"), 
-        ("equivalent_beam_angle", report_cal_params, original_cal_params, "Calibration"),
-        ("gain_correction", report_cal_params, original_cal_params, "Calibration"),
-        ("sa_correction", report_cal_params, original_cal_params, "Calibration"),
-        ("beamwidth_athwartship", report_cal_params, original_cal_params, "Calibration"),
-        ("beamwidth_alongship", report_cal_params, original_cal_params, "Calibration"),
-        ("angle_offset_athwartship", report_cal_params, original_cal_params, "Calibration"),
-        ("angle_offset_alongship", report_cal_params, original_cal_params, "Calibration"),
-        ("angle_sensitivity_athwartship", report_cal_params, original_cal_params, "Calibration"),
-        ("angle_sensitivity_alongship", report_cal_params, original_cal_params, "Calibration"),
-        
-        # NOTE: the following parameters shouldn't be applied from the cal report, because the raw file is the source of truth
-        # ("transmit_power", report_other_params, original_other_params, "Other"),
-        # ("transmit_bandwidth", report_other_params, original_other_params, "Other"),
-        # ("transmit_duration_nominal", report_other_params, original_other_params, "Other"),
-        # ("sample_interval", report_other_params, original_other_params, "Other"),
-    ]
-    
-    # Compare numerical parameters
-    for param_name, file_params, orig_params, param_type in comparisons:
-        print(f"\n{param_name}")
-        print("-" * 50)
-        
-        file_exists, orig_exists = param_name in file_params, param_name in orig_params
-        
-        if file_exists and orig_exists:
-            file_vals = extract_values(file_params[param_name])
-            orig_vals = extract_values(orig_params[param_name])
-            create_channel_table(file_vals, orig_vals, param_name,
-                                original_other_params.get('channel', []), units.get(param_name, ""))
-        else:
-            print(f"  Original (.nc):  {'Present' if orig_exists else 'Missing'}")
-            print(f"  Report (.cal):     {'Present' if file_exists else 'Missing'}")
-            if file_exists and not orig_exists:
-                print(f"  Report value:      {file_params[param_name]}")
-            elif not file_exists and orig_exists:
-                print(f"  Original value:  {orig_params[param_name]}")
-        print()
-
-    print("\n" + "="*80)
-    print("OTHER PARAMETER COMPARISON (String Parameters)")
-    print("="*80)
-    print()
-    
-    # Compare string parameters (excluding report-specific ones)
-    string_params = ["sonar_software_version", "channel", "transducer"]
-    available_params = [p for p in string_params if p in report_other_params or p in original_other_params]
-    
-    for param_name in available_params:
-        print(f"\n{param_name}")
-        print("-" * 50)
-        
-        file_exists, orig_exists = param_name in report_other_params, param_name in original_other_params
-        
-        if file_exists and orig_exists:
-            file_val = report_other_params[param_name]
-            orig_val = original_other_params[param_name]
-            
-            # Convert to lists if iterable but not string
-            if hasattr(orig_val, '__iter__') and not isinstance(orig_val, str):
-                orig_val = orig_val if isinstance(orig_val, list) else list(orig_val)
-            if hasattr(file_val, '__iter__') and not isinstance(file_val, str):
-                file_val = file_val if isinstance(file_val, list) else list(file_val)
-                
-            print(f"  Original (.nc):  {orig_val}")
-            print(f"  Report (.cal):     {file_val}")
-            print(f"  Status:          {'Match' if str(orig_val) == str(file_val) else 'Different'}")
-        else:
-            print(f"  Original (.nc):  {'Present' if orig_exists else 'Missing'}")
-            print(f"  Report (.cal):     {'Present' if file_exists else 'Missing'}")
-            if file_exists and not orig_exists:
-                print(f"  Report value:      {report_other_params[param_name]}")
-            elif not file_exists and orig_exists:
-                print(f"  Original value:  {original_other_params[param_name]}")
-        print()
-
-    print("\n" + "="*80)
-    print("CALIBRATION REPORT SPECIFIC PARAMETERS")
-    print("="*80)
-    print()
-    
-    # Display report-specific parameters without comparison
-    report_specific_params = ["date", "comments"]
-    for param_name in report_specific_params:
-        if param_name in report_other_params:
-            print(f"\n{param_name}")
-            print("-" * 50)
-            print(f"  Report value: {report_other_params[param_name]}")
-            print()
-    
-    print("="*80)
-
-
-def perform_range_analysis(ds_Sv_baseline, ds_Sv_calibrated, echodata, title):
-    """Perform range-dependent analysis of calibration parameter effects.
-    
-    Analyzes how calibration parameter effects vary with depth/range by comparing
-    baseline and calibrated Sv values at multiple depth samples. This is particularly
-    useful for understanding range-dependent effects like absorption.
-    
-    Args:
-        ds_Sv_baseline: Baseline Sv dataset
-        ds_Sv_calibrated: Calibrated Sv dataset to compare
-        echodata: EchoData object for frequency information
-        title (str): Title for the analysis output
-    """
-    # RANGE DEPENDENCY ANALYSIS
-    print("="*90)
-    print(f"         {title}")
-    print("="*90)
-
-    # Test at multiple range samples to show how absorption effects grow with distance
-    test_range_samples = [50, 200, 400, 600, 800]  # range_sample indices to test (not actual depth)
-
-    for range_idx in test_range_samples:
-        echo_range_coord = ds_Sv_baseline.echo_range
-        actual_depth = float(echo_range_coord.isel(channel=0, ping_time=0, range_sample=range_idx).values)
-
-        print(f"\n Depth: {actual_depth:.1f} meters:")
-        print("-" * 50)
-        
-        try:
-            # Calculate mean across all pings for this range sample
-            baseline_range_sample = ds_Sv_baseline["Sv"].isel(range_sample=range_idx).mean(dim=['ping_time'])
-            calibrated_range_sample = ds_Sv_calibrated["Sv"].isel(range_sample=range_idx).mean(dim=['ping_time'])
-            
-            print("Freq     | Baseline Sv | Abs Test Sv  | Sv Change ")
-            print("-" * 70)
-            
-            # Get channel information from echodata
-            frequencies = echodata["Sonar/Beam_group1"]["frequency_nominal"].values
-            
-            for ch_idx in range(len(frequencies)):
-                freq = float(frequencies[ch_idx])
-                freq_key = f"{freq/1000:.0f}kHz"
-                
-                baseline_val = float(baseline_range_sample.isel(channel=ch_idx).values)
-                calibrated_val = float(calibrated_range_sample.isel(channel=ch_idx).values)
-                sv_diff = calibrated_val - baseline_val
-                
-                print(f"{freq_key:>7} | {baseline_val:10.3f} | {calibrated_val:11.3f} | {sv_diff:+8.3f}")
-            
-        except Exception as e:
-            print(f"  Error at sample index {range_idx}: {e}")
-            print("    (Sample index may be beyond available data)")
-
-
-def sv_difference_summary_stats_plot(ds_Sv_baseline, ds_Sv_calibrated, title):
-    """
-    Create detailed difference analysis plots comparing baseline and calibrated Sv data.
-    
-    Parameters:
-    -----------
-    ds_Sv_baseline : xarray.Dataset
-        Baseline Sv dataset
-    ds_Sv_combined_test : xarray.Dataset  
-        Calibrated Sv dataset to compare against baseline
-    frequency_nominal : list
-        List of nominal frequencies
-    """
-    frequency_nominal = ds_Sv_baseline["frequency_nominal"]
-
-    # Check for frequencies with all NaN data
-    sv_data_temp = ds_Sv_calibrated['Sv']
-    valid_freq_indices = []
-    
-    for freq_idx in range(len(frequency_nominal)):
-        freq_diff = sv_data_temp.isel(channel=freq_idx)
-        has_valid_data = np.any(~np.isnan(freq_diff.values))
-        
-        if not has_valid_data:
-            freq_khz = int(frequency_nominal[freq_idx].values / 1000)
-            print(f"WARNING: {freq_khz} kHz has ALL NaN values - skipping this frequency in plots")
-        else:
-            valid_freq_indices.append(freq_idx)
-    
-    # Filter to only valid frequencies
-    frequency_nominal = frequency_nominal[valid_freq_indices]
-
-    # Create focused plots showing summary statistics and distribution
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-    # Set up common variables
-    freq_names = [f'{int(f/1000)} kHz' for f in frequency_nominal] 
-    sv_diff_data = (ds_Sv_calibrated['Sv'] - ds_Sv_baseline['Sv']).isel(channel=valid_freq_indices)
-
-    # Plot 1: Summary statistics across all data
-    # NOTE: This uses the FULL DATASET for statistical calculations
-    ax1 = axes[0]
-    freq_names = [f'{int(f/1000)} kHz' for f in frequency_nominal]
-    mean_diffs = []
-    std_diffs = []
-    max_abs_diffs = []
-
-    for freq_idx in range(len(frequency_nominal)):
-        freq_diff = sv_diff_data.isel(channel=freq_idx)
-        mean_diffs.append(float(freq_diff.mean().values))
-        std_diffs.append(float(freq_diff.std().values))
-        max_abs_diffs.append(float(np.abs(freq_diff).max().values))
-
-    x_pos = np.arange(len(freq_names))
-    width = 0.25
-
-    bars1 = ax1.bar(x_pos - width, mean_diffs, width, label='Mean Difference', alpha=0.8)
-    bars2 = ax1.bar(x_pos, std_diffs, width, label='Std Dev', alpha=0.8)
-    bars3 = ax1.bar(x_pos + width, max_abs_diffs, width, label='Max |Difference|', alpha=0.8)
-
-    ax1.set_xlabel('Frequency', fontsize=12)
-    ax1.set_ylabel('Sv Difference (dB)', fontsize=12)
-    ax1.set_title('Summary Statistics by Frequency', fontsize=14, fontweight='bold')
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels(freq_names)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3, axis='y')
-    ax1.axhline(y=0, color='black', linestyle=':', alpha=0.5)
-
-    # Add value labels on bars
-    for bars in [bars1, bars2, bars3]:
-        for bar in bars:
-            height = bar.get_height()
-            ax1.annotate(f'{height:.2f}',
-                        xy=(bar.get_x() + bar.get_width() / 2, height),
-                        xytext=(0, 3),  # 3 points vertical offset
-                        textcoords="offset points",
-                        ha='center', va='bottom', fontsize=9)
-
-    # Plot 2: Histogram of differences
-    ax2 = axes[1]
-    colors = ['blue', 'green', 'orange', 'red']
-    for freq_idx, (freq_label, color) in enumerate(zip(freq_names, colors)):
-        freq_diff = sv_diff_data.isel(channel=freq_idx)
-        valid_diff = freq_diff.values[~np.isnan(freq_diff.values)].flatten()
-        
-        data_range = np.ptp(valid_diff) if len(valid_diff) > 0 else 0
-        if len(valid_diff) == 0 or data_range == 0:
-            ax2.axvline(x=valid_diff[0] if len(valid_diff) > 0 else 0,
-                        color=color, alpha=0.6, label=f'{freq_label} (constant)')
-        else:
-            # Compute safe number of bins: ensure each bin spans at least
-            # a representable float width to avoid "too many bins" errors
-            max_bins = max(1, int(data_range / (np.finfo(float).eps * max(1, abs(valid_diff.mean())) * 1e6)))
-            n_bins = min(50, max_bins)
-            ax2.hist(valid_diff, bins=n_bins, alpha=0.6, label=freq_label, color=color, density=True)
-
-    ax2.set_xlabel('Sv Difference (CAL - Baseline) (dB)', fontsize=12)
-    ax2.set_ylabel('Probability Density', fontsize=12)
-    ax2.set_title('Distribution of Sv Differences', fontsize=14, fontweight='bold')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    ax2.axvline(x=0, color='black', linestyle=':', alpha=0.5)
-
-    plt.tight_layout()
-    plt.suptitle(title, fontsize=16, fontweight='bold', y=1.02)
-    plt.show()
 
