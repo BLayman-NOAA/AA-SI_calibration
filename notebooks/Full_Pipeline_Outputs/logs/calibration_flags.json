@@ -10,6 +10,13 @@
     "Missing EK80 parameter 'BeamWidthAthwartship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
     "Missing EK80 parameter 'BeamWidthAlongship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
     "Missing EK80 parameter 'AngleOffsetAthwartship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
+    "Missing EK80 parameter 'AngleOffsetAlongship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
+    "Missing EK80 parameter 'frequency' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
+    "Missing EK80 parameter 'Gain' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
+    "Missing EK80 parameter 'SaCorrection' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
+    "Missing EK80 parameter 'BeamWidthAthwartship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
+    "Missing EK80 parameter 'BeamWidthAlongship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
+    "Missing EK80 parameter 'AngleOffsetAthwartship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis",
     "Missing EK80 parameter 'AngleOffsetAlongship' in channel CalibrationDataFile-D20230720-T192325_70cw_onaxis"
   ]
 }
