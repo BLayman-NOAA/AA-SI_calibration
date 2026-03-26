@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import os
+from aa_si_utils import utils
+from aa_si_visualization import assorted
 
 
 def calculate_full_dataset_effect(ds_modified, ds_baseline, parameter_name, output_logs_folder, thresholds=None):
@@ -277,8 +279,22 @@ def verify_additive_effects(gain_results, sa_results, eba_results, sound_speed_r
     return verification_results
 
 
-def compare_calibration_parameters(report_cal_params, report_env_params, report_other_params, original_cal_params, original_env_params, original_other_params, echodata):
-    """Compare calibration parameters between .cal file and original netCDF values."""
+def compare_calibration_parameters(report_params, original_params, echodata):
+    """Compare calibration parameters between .cal file and original netCDF values.
+
+    Args:
+        report_params: Consolidated parameters dict from calibration report with keys
+            cal_params, env_params, other_params.
+        original_params: Consolidated parameters dict from original netCDF with keys
+            cal_params, env_params, other_params.
+        echodata: Echopype EchoData object for unit extraction.
+    """
+    report_cal_params = report_params["cal_params"]
+    report_env_params = report_params["env_params"]
+    report_other_params = report_params["other_params"]
+    original_cal_params = original_params["cal_params"]
+    original_env_params = original_params["env_params"]
+    original_other_params = original_params["other_params"]
     
     # Define units and formatting for all parameters
     units = {
@@ -633,14 +649,149 @@ def sv_difference_summary_stats_plot(ds_Sv_baseline, ds_Sv_calibrated, title):
     plt.show()
 
 
+def compute_calibrated_sv_datasets(echodata, report_params):
+    """Compute Sv datasets with individual and combined calibration parameters.
+
+    Args:
+        echodata: Echopype EchoData object.
+        report_params: Consolidated calibration parameters dict with keys
+            cal_params, env_params, other_params.
+
+    Returns:
+        dict: Dictionary of unmasked Sv datasets keyed by parameter name:
+            - gain: Sv with gain_correction only
+            - sa: Sv with sa_correction only
+            - eba: Sv with equivalent_beam_angle only
+            - sound_speed: Sv with sound_speed only
+            - absorption: Sv with sound_absorption only
+            - combined: Sv with all parameters applied
+    """
+    report_cal_params = report_params["cal_params"]
+    report_env_params = report_params["env_params"]
+
+    sv_datasets = {}
+
+    sv_datasets["gain"] = ep.calibrate.compute_Sv(
+        echodata, cal_params={"gain_correction": report_cal_params["gain_correction"]}
+    )
+    sv_datasets["sa"] = ep.calibrate.compute_Sv(
+        echodata, cal_params={"sa_correction": report_cal_params["sa_correction"]}
+    )
+    sv_datasets["eba"] = ep.calibrate.compute_Sv(
+        echodata, cal_params={"equivalent_beam_angle": report_cal_params["equivalent_beam_angle"]}
+    )
+    sv_datasets["sound_speed"] = ep.calibrate.compute_Sv(
+        echodata, env_params={"sound_speed": report_env_params["sound_speed"]}
+    )
+    sv_datasets["absorption"] = ep.calibrate.compute_Sv(
+        echodata, env_params={"sound_absorption": report_env_params["sound_absorption"]}
+    )
+
+    cal_params_combined = {
+        "gain_correction": report_cal_params["gain_correction"],
+        "sa_correction": report_cal_params["sa_correction"],
+        "equivalent_beam_angle": report_cal_params["equivalent_beam_angle"],
+    }
+    env_params_combined = {
+        "sound_speed": report_env_params["sound_speed"],
+        "sound_absorption": report_env_params["sound_absorption"],
+    }
+    sv_datasets["combined"] = ep.calibrate.compute_Sv(
+        echodata, cal_params=cal_params_combined, env_params=env_params_combined
+    )
+
+    return sv_datasets
+
+
+def run_sv_comparison_analysis(
+    ds_Sv_baseline,
+    calibrated_sv_datasets,
+    echodata,
+    original_params,
+    output_logs_folder,
+    sv_flag_thresholds=None,
+    echogram_min_depth=0,
+    echogram_max_depth=1200,
+    echogram_ping_min=0,
+    echogram_ping_max=1000,
+):
+    """Run comparison analysis between baseline and calibrated Sv datasets.
+
+    Calculates statistical effects of each calibration parameter, generates
+    diagnostic plots, performs range analysis, and verifies additive effects.
+
+    Args:
+        ds_Sv_baseline: Masked baseline Sv dataset.
+        calibrated_sv_datasets: Dict of masked Sv datasets keyed by parameter name
+            (gain, sa, eba, sound_speed, absorption, combined).
+        echodata: Echopype EchoData object.
+        original_params: Consolidated original parameters dict with keys
+            cal_params, env_params, other_params.
+        output_logs_folder: String or Path to folder for saving log/flag files.
+        sv_flag_thresholds: Optional dict of thresholds for flagging Sv impacts.
+        echogram_min_depth: Minimum depth for echogram visualization (default 0).
+        echogram_max_depth: Maximum depth for echogram visualization (default 1200).
+        echogram_ping_min: Minimum ping index for echogram visualization (default 0).
+        echogram_ping_max: Maximum ping index for echogram visualization (default 1000).
+
+    Returns:
+        dict: Dictionary containing verification_results from additive effects check.
+    """
+    output_logs_folder = Path(output_logs_folder)
+    original_other_params = original_params["other_params"]
+
+    # Calculate effects of each parameter
+    gain_results = calculate_full_dataset_effect(
+        calibrated_sv_datasets["gain"], ds_Sv_baseline, "Gain Correction", output_logs_folder, sv_flag_thresholds
+    )
+    sa_results = calculate_full_dataset_effect(
+        calibrated_sv_datasets["sa"], ds_Sv_baseline, "Sa Correction", output_logs_folder, sv_flag_thresholds
+    )
+    eba_results = calculate_full_dataset_effect(
+        calibrated_sv_datasets["eba"], ds_Sv_baseline, "Equivalent Beam Angle", output_logs_folder, sv_flag_thresholds
+    )
+    sound_speed_results = calculate_full_dataset_effect(
+        calibrated_sv_datasets["sound_speed"], ds_Sv_baseline, "Sound Speed", output_logs_folder, sv_flag_thresholds
+    )
+    absorption_results = calculate_full_dataset_effect(
+        calibrated_sv_datasets["absorption"], ds_Sv_baseline, "Absorption", output_logs_folder, sv_flag_thresholds
+    )
+    combined_results = calculate_full_dataset_effect(
+        calibrated_sv_datasets["combined"], ds_Sv_baseline, "Combined Results", output_logs_folder, sv_flag_thresholds
+    )
+
+    # Plot effects
+    sv_difference_summary_stats_plot(ds_Sv_baseline, calibrated_sv_datasets["absorption"], "Absorption Differences")
+    sv_difference_summary_stats_plot(ds_Sv_baseline, calibrated_sv_datasets["gain"], "Gain Differences")
+    sv_difference_summary_stats_plot(ds_Sv_baseline, calibrated_sv_datasets["sa"], "Sa Correction Differences")
+    sv_difference_summary_stats_plot(ds_Sv_baseline, calibrated_sv_datasets["sound_speed"], "Sound Speed Differences")
+    sv_difference_summary_stats_plot(ds_Sv_baseline, calibrated_sv_datasets["combined"], "Combined Differences")
+
+    # Range analysis
+    perform_range_analysis(ds_Sv_baseline, calibrated_sv_datasets["absorption"], echodata, "Absorption Effect Range Analysis")
+
+    # Echogram visualization
+    assorted.sv_differences_echograms(
+        ds_Sv_baseline, calibrated_sv_datasets["combined"],
+        original_other_params["frequency_nominal"],
+        echogram_max_depth, echogram_min_depth,
+        echogram_ping_min, echogram_ping_max,
+        x_axis_units="pings", y_axis_units="meters"
+    )
+
+    # Verify additive effects
+    verification_results = verify_additive_effects(
+        gain_results, sa_results, eba_results,
+        sound_speed_results, absorption_results, combined_results
+    )
+
+    return {"verification_results": verification_results}
+
+
 def run_full_calibration_comparison(
     echodata,
-    report_cal_params,
-    report_env_params,
-    report_other_params,
-    original_cal_params,
-    original_env_params,
-    original_other_params,
+    report_params,
+    original_params,
     output_logs_folder,
     sv_output_folder,
     sv_flag_thresholds=None,
@@ -660,14 +811,12 @@ def run_full_calibration_comparison(
 
     Args:
         echodata: Echopype EchoData object.
-        report_cal_params: Calibration parameters from the calibration report file.
-        report_env_params: Environmental parameters from the calibration report file.
-        report_other_params: Other parameters from the calibration report file.
-        original_cal_params: Calibration parameters from the original netCDF file.
-        original_env_params: Environmental parameters from the original netCDF file.
-        original_other_params: Other parameters from the original netCDF file.
-        output_logs_folder: Path to folder for saving log/flag files.
-        sv_output_folder: Path to folder for saving processed Sv data.
+        report_params: Consolidated calibration parameters from the calibration report,
+            dict with keys cal_params, env_params, other_params.
+        original_params: Consolidated calibration parameters from the original netCDF,
+            dict with keys cal_params, env_params, other_params.
+        output_logs_folder: String or Path to folder for saving log/flag files.
+        sv_output_folder: String or Path to folder for saving processed Sv data.
         sv_flag_thresholds: Optional dict of thresholds for flagging Sv impacts.
         mask_seafloor_buffer_m: Buffer in meters for seafloor mask removal (default 10.0).
         mask_surface_depth_m: Depth in meters for surface mask removal (default 10.0).
@@ -684,17 +833,19 @@ def run_full_calibration_comparison(
             - mask: The applied data mask
             - verification_results: Results from additive effects verification
     """
-    from aa_si_utils import utils
-    from aa_si_visualization import assorted
+
+    output_logs_folder = Path(output_logs_folder)
+    sv_output_folder = Path(sv_output_folder)
+
+    report_cal_params = report_params["cal_params"]
+    report_env_params = report_params["env_params"]
+    report_other_params = report_params["other_params"]
+    original_cal_params = original_params["cal_params"]
+    original_env_params = original_params["env_params"]
+    original_other_params = original_params["other_params"]
 
     if mask_frequencies is None:
         mask_frequencies = [70, 120, 200]
-
-    # --- Step 1: Compare calibration parameters ---
-    compare_calibration_parameters(
-        report_cal_params, report_env_params, report_other_params,
-        original_cal_params, original_env_params, original_other_params, echodata
-    )
 
     # --- Step 2: Calculate Baseline Sv and apply masks ---
     ds_Sv = ep.calibrate.compute_Sv(echodata)

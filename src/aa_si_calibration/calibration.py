@@ -556,7 +556,7 @@ def load_standardized_calibration_parameters(
     return result
 
 
-def print_calibration_values(echodata, env_params, cal_params, other_params, title="Calibration Values"):
+def print_calibration_values(echodata, params, title="Calibration Values"):
     """Print formatted calibration parameters with appropriate units and formatting.
     
     Prints calibration parameters in echopype's netCDF format, organizing them by
@@ -564,11 +564,15 @@ def print_calibration_values(echodata, env_params, cal_params, other_params, tit
     
     Args:
         echodata: Echopype EchoData object for unit extraction
-        env_params (dict): Environmental parameters (sound_speed, sound_absorption)
-        cal_params (dict): Calibration parameters (gain_correction, sa_correction, equivalent_beam_angle)
-        other_params (dict): Other parameters (channels, transmit_duration, frequency_nominal)
+        params (dict): Consolidated calibration parameters dict with keys:
+            - cal_params: Calibration parameters (gain_correction, sa_correction, equivalent_beam_angle, etc.)
+            - env_params: Environmental parameters (sound_speed, sound_absorption)
+            - other_params: Other parameters (channel, transmit_duration, frequency_nominal, etc.)
         title (str, optional): Title for the printed output. Defaults to "Calibration Values"
     """
+    cal_params = params["cal_params"]
+    env_params = params["env_params"]
+    other_params = params["other_params"]
 
     # extract data
     sound_speed_num = env_params["sound_speed"]
