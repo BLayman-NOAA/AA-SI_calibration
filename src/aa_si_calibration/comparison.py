@@ -1,3 +1,10 @@
+"""Calibration comparison and Sv impact analysis.
+
+Provides functions for comparing calibration parameters, computing
+calibrated Sv datasets, calculating statistical effects of individual
+parameters, and verifying that effects are additive.
+"""
+
 import echopype as ep
 from pathlib import Path
 import numpy as np
@@ -137,28 +144,18 @@ def calculate_full_dataset_effect(ds_modified, ds_baseline, parameter_name, outp
 
 
 def verify_additive_effects(gain_results, sa_results, eba_results, sound_speed_results, absorption_results, combined_results):
-    """
-    Verify that individual parameter effects add up to the combined effect.
-    
-    Parameters:
-    -----------
-    gain_results : dict
-        Results from gain correction effect calculation
-    sa_results : dict  
-        Results from SA correction effect calculation
-    eba_results : dict
-        Results from equivalent beam angle effect calculation
-    sound_speed_results : dict
-        Results from sound speed effect calculation
-    absorption_results : dict
-        Results from absorption effect calculation
-    combined_results : dict
-        Results from combined effect calculation
-        
+    """Verify that individual parameter effects add up to the combined effect.
+
+    Args:
+        gain_results: Results from gain correction effect calculation.
+        sa_results: Results from SA correction effect calculation.
+        eba_results: Results from equivalent beam angle effect calculation.
+        sound_speed_results: Results from sound speed effect calculation.
+        absorption_results: Results from absorption effect calculation.
+        combined_results: Results from combined effect calculation.
+
     Returns:
-    --------
-    verification_results : dict
-        Dictionary containing verification statistics for each frequency
+        dict: Verification statistics for each frequency.
     """
     
     print("="*80)
@@ -541,17 +538,12 @@ def perform_range_analysis(ds_Sv_baseline, ds_Sv_calibrated, echodata, title):
 
 
 def sv_difference_summary_stats_plot(ds_Sv_baseline, ds_Sv_calibrated, title):
-    """
-    Create detailed difference analysis plots comparing baseline and calibrated Sv data.
-    
-    Parameters:
-    -----------
-    ds_Sv_baseline : xarray.Dataset
-        Baseline Sv dataset
-    ds_Sv_calibrated : xarray.Dataset  
-        Calibrated Sv dataset to compare against baseline
-    title : str
-        Title for the plot
+    """Create difference analysis plots comparing baseline and calibrated Sv data.
+
+    Args:
+        ds_Sv_baseline: Baseline Sv dataset.
+        ds_Sv_calibrated: Calibrated Sv dataset to compare against baseline.
+        title: Title for the plot.
     """
     frequency_nominal = ds_Sv_baseline["frequency_nominal"]
 

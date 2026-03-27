@@ -1,4 +1,10 @@
-    
+"""Low-level readers for Simrad EK60/EK80 raw files.
+
+Provides binary datagram parsing, XML configuration extraction, GPS/NMEA
+coordinate extraction, and channel-configuration export used by the rest of
+the calibration pipeline.
+"""
+
 from pathlib import Path
 import json
 import re
@@ -491,7 +497,7 @@ def extract_gps_data(raw_path):
                 
                 try:
                     nmea_string = nmea_body.decode('utf-8', errors='replace').strip('\x00')
-                except:
+                except (UnicodeDecodeError, AttributeError):
                     continue
                 
                 # Identify sentence type

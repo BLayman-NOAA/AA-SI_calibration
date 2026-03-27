@@ -1,4 +1,12 @@
-# imports and variables
+"""Standardized calibration file I/O, schema validation, and key generation.
+
+This module is the backbone for reading, writing, and validating the
+standardized single-channel YAML calibration file format used throughout
+the calibration pipeline.  It also provides the canonical
+``build_calibration_key`` function that generates the unique identifiers
+for channel configurations.
+"""
+
 from pathlib import Path
 import numpy as np
 import json
@@ -31,8 +39,6 @@ def _list_representer(dumper, data):
 _StandardizedFileDumper.add_representer(str, _str_representer)
 _StandardizedFileDumper.add_representer(list, _list_representer)
 
-# STRING_IDENTIFIER_FIELDS is imported from constants.py
-
 
 def ensure_string_identifiers(data):
     """Ensure specified identifier fields are stored as strings.
@@ -54,7 +60,7 @@ def ensure_string_identifiers(data):
         return data
 
 
-# ==== STANDARDIZED CALIBATION FILE CODE ====
+# ==== STANDARDIZED CALIBRATION FILE CODE ====
 
 
 def extract_degree_constraints(schema):
@@ -140,6 +146,7 @@ def sanitize_degree_values(calibration_dict, schema):
 
 
 def load_standardized_calibration_schema(schema_path=None):
+    """Load and return the JSON schema for standardized calibration files."""
     schema_file = Path(schema_path) if schema_path else SCHEMA_PATH
     if not schema_file.exists():
         raise FileNotFoundError(f"Schema file not found: {schema_file}")
@@ -148,6 +155,7 @@ def load_standardized_calibration_schema(schema_path=None):
 
 
 def extract_channel_precision_map(schema):
+    """Return a mapping of field name to x-precision from the schema."""
     channel_props = schema.get("$defs", {}).get("channelBlock", {}).get("properties", {})
     precision_map = {}
     for field_name, metadata in channel_props.items():
@@ -158,6 +166,7 @@ def extract_channel_precision_map(schema):
 
 
 def is_numeric_value(value):
+    """Return True if *value* is a numeric type (excluding bool)."""
     if isinstance(value, bool):
         return False
     return isinstance(value, (int, float, np.integer, np.floating, Decimal))
@@ -180,6 +189,7 @@ def _quantize_decimal(value, precision):
 
 
 def round_numeric_value(value, precision):
+    """Round a numeric value to the given decimal precision."""
     quantized = _quantize_decimal(value, precision)
     if quantized is None:
         return value
@@ -187,6 +197,7 @@ def round_numeric_value(value, precision):
 
 
 def apply_precision_to_channel(channel_entry, precision_map):
+    """Round all fields in *channel_entry* according to *precision_map*."""
     for field_name, precision in precision_map.items():
         if field_name in channel_entry:
             channel_entry[field_name] = round_numeric_value(channel_entry[field_name], precision)
@@ -207,6 +218,7 @@ def _value_exceeds_precision(value, precision):
 
 
 def enforce_precision_limits(calibration_dict, precision_map):
+    """Raise ValueError if any channel field exceeds the allowed precision."""
     channels = calibration_dict.get("channels", []) or []
     for channel_index, channel_entry in enumerate(channels):
         for field_name, precision in precision_map.items():
@@ -217,11 +229,6 @@ def enforce_precision_limits(calibration_dict, precision_map):
                 )
 
 
-# NOMINAL_FREQ_PATTERN is imported from constants.py
-# extract_nominal_frequency_from_transducer_model is imported from utils.py
-
-
-# converts from echopype computeSV format to standardized file format
 def extract_serial_number_from_channel_name(channel_name):
     """Return first hex-like serial substring embedded within channel name."""
     if channel_name is None:
@@ -579,6 +586,7 @@ def convert_params_to_standardized_names(channels, cal_params, env_params, other
 
 
 def convert_numpy_scalars(obj):
+    """Recursively convert numpy scalar types to native Python types."""
     if isinstance(obj, dict):
         # Convert ALL keys to str, including numpy.str_
         return {str(k): convert_numpy_scalars(v) for k, v in obj.items()}
@@ -608,7 +616,7 @@ def assign_parameters_to_standardized_dictionary(
     channel_params,
     global_params
     ):
-    
+    """Assemble validated standardized calibration dictionary from channel and global params."""
     standardized_dictionary = get_empty_top_level_params()
     
     # Generate a shared timestamp for all channels in this batch
@@ -669,6 +677,7 @@ def assign_parameters_to_standardized_dictionary(
 
 
 def get_empty_top_level_params():
+    """Return a skeleton top-level standardized calibration dictionary."""
     empty_channel_data = {
         "cruise_id": None,
         "calibration_report_title": None,
@@ -680,6 +689,7 @@ def get_empty_top_level_params():
 
 
 def get_empty_channel_params():
+    """Return a skeleton channel-level dictionary with all fields set to None."""
     empty_channel_data = {
         # Source file provenance (first for quick identification)
         "source_filenames": None,
@@ -748,6 +758,7 @@ def get_empty_channel_params():
 
 
 def get_calibration_file_names_from_folder(source_cal_folder):
+    """Return a list of .raw and .cal file names found in *source_cal_folder*."""
     file_names = []
 
     if source_cal_folder is not None:
@@ -990,7 +1001,7 @@ def remap_to_short_keys(
 
     The short identifier (e.g. ``2016-07-03__38000__config-1``) becomes the
     key used in the mapping and calibration configuration files, as well as
-    the filename stem for individual ``.yml`` files.
+    the filename stem for individual ``.yaml`` files.
 
     Args:
         mapping_dict: ``{filename: {channel_id: long_cal_key, …}, …}``
@@ -1084,7 +1095,7 @@ def get_calibration_from_file(
         channel_id: Channel ID (e.g. ``'GPT  38 kHz 009072… ES38B'``).
         mapping_dict: The mapping dictionary (``filename -> channel_id -> cal_key``).
         cal_files_dir: Path to the directory containing individual
-            single-channel ``.yml`` calibration files.
+            single-channel ``.yaml`` calibration files.
 
     Returns:
         Calibration data dictionary, or *None* if not found.
@@ -1097,8 +1108,9 @@ def get_calibration_from_file(
 
     cal_key = mapping_dict[filename][channel_id]
     cal_files_dir = Path(cal_files_dir)
-    cal_file_path = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yml"
-
+    cal_file_path = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yaml"
+    if not cal_file_path.exists():
+        cal_file_path = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yml"
     if not cal_file_path.exists():
         return None
 
@@ -1193,7 +1205,7 @@ def save_single_channel_files(
     saved_count = 0
     for full_key, channel_data in keyed_channels.items():
         file_stem = filename_map[full_key]
-        file_path = output_dir / f"{file_stem}.yml"
+        file_path = output_dir / f"{file_stem}.yaml"
 
         channel_data_cleaned = _strip_internal_keys(ensure_string_identifiers(channel_data))
 
@@ -1251,7 +1263,7 @@ def save_individual_calibration_files(
         cal_data_cleaned = _strip_internal_keys(ensure_string_identifiers(cal_data))
 
         file_stem = filename_map[cal_key]
-        file_path = output_dir / f"{file_stem}.yml"
+        file_path = output_dir / f"{file_stem}.yaml"
 
         with open(file_path, 'w') as f:
             yaml.dump(cal_data_cleaned, f, Dumper=_StandardizedFileDumper, default_flow_style=False, sort_keys=False)
@@ -1445,7 +1457,7 @@ def generate_template_yaml_string(template: dict, calibration_date: str = None) 
             Falls back to ``template['calibration_date']`` when *None*.
 
     Returns:
-        YAML-formatted string suitable for writing to a ``.yml`` file.
+        YAML-formatted string suitable for writing to a ``.yaml`` file.
     """
     fmt = _fmt_yaml_value
     fmt_list = _fmt_yaml_list
@@ -1711,7 +1723,7 @@ def save_multi_channel_config_with_comments(templates: dict, file_path):
 
 def load_calibration_templates(template_dir) -> dict:
     """
-    Load all calibration template ``.yml`` files from a directory.
+    Load all calibration template ``.yaml`` (or ``.yml``) files from a directory.
 
     Args:
         template_dir: Path to the directory containing template files.
@@ -1721,10 +1733,12 @@ def load_calibration_templates(template_dir) -> dict:
     """
     template_dir = Path(template_dir)
     templates = {}
-    for template_file in template_dir.glob("*.yml"):
+    for template_file in sorted(
+        list(template_dir.glob("*.yaml")) + list(template_dir.glob("*.yml"))
+    ):
         with open(template_file, 'r') as f:
             template = yaml.safe_load(f)
-        # Extract key from filename (remove .yml extension)
+        # Extract key from filename stem (works for both .yaml and .yml)
         key = template_file.stem
         templates[key] = template
     return templates
@@ -1780,7 +1794,7 @@ def generate_calibration_templates(
 ) -> dict:
     """Generate calibration template files from unique channel configurations.
 
-    Creates one template ``.yml`` file per unique channel, with null values
+    Creates one template ``.yaml`` file per unique channel, with null values
     for the user to fill in. All templates share the same ``record_created``
     timestamp.
 
@@ -1789,7 +1803,7 @@ def generate_calibration_templates(
             (as returned by :func:`~aa_si_calibration.raw_reader_api.extract_unique_channels`).
         calibration_date: Calibration date string (``YYYY-MM-DD``).
         record_author: Author name to embed in each template.
-        output_dir: Directory to write the individual ``.yml`` files.
+        output_dir: Directory to write the individual ``.yaml`` files.
         short_filenames: If True, use compact ``<date>_<freq>_config-<N>``
             naming; otherwise use long key-derived names.
 
@@ -1819,7 +1833,7 @@ def generate_calibration_templates(
         calibration_templates[channel_key] = template
 
         safe_name = filename_map[channel_key]
-        template_file = output_dir / f"{safe_name}.yml"
+        template_file = output_dir / f"{safe_name}.yaml"
         save_template_with_comments(template, template_file, calibration_date)
 
     # Remap to short keys if requested
@@ -1835,7 +1849,7 @@ def generate_calibration_templates(
     print(f"  Record created: {batch_timestamp}")
     print(f"  Record author: {record_author}")
     print("\nTemplate files created:")
-    for template_file in sorted(output_dir.glob("*.yml")):
+    for template_file in sorted(output_dir.glob("*.yaml")):
         print(f"  - {template_file.name}")
 
     return calibration_templates
@@ -1847,7 +1861,7 @@ def validate_loaded_templates(
     """Load calibration templates and check each one for completeness.
 
     Args:
-        template_dir: Directory containing calibration template ``.yml`` files.
+        template_dir: Directory containing calibration template ``.yaml`` files.
 
     Returns:
         Tuple of ``(loaded_templates, all_complete)`` where

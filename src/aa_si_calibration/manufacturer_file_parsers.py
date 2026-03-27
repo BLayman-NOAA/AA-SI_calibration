@@ -1,4 +1,10 @@
-# imports and variables
+"""Parsers for manufacturer-supplied calibration files (EK60 .cal, EK80 .xml).
+
+Each parser extracts raw calibration parameters from the manufacturer's native
+format and converts them to a common dict-of-lists structure used by the rest of
+the calibration pipeline.
+"""
+
 from pathlib import Path
 import json
 import re
@@ -68,7 +74,7 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                         try:
                             parts = line_content.split()
                             cal_params['Date'] = parts[1]
-                        except:
+                        except (IndexError, ValueError):
                             pass
                         continue
                     
@@ -76,7 +82,7 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                     if line_content.startswith('Comments:'):
                         try:
                             cal_params['Comments'] = lines[i+1][1:]
-                        except:
+                        except (IndexError, KeyError):
                             pass
                         continue
                     
@@ -91,7 +97,7 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                         try:
                             transducer_info = line_content.replace('Transducer:', '').strip()
                             cal_params['Transducer'] = transducer_info
-                        except:
+                        except (IndexError, ValueError):
                             pass
                         continue
                     elif line_content.startswith('Environment:'):
@@ -125,7 +131,7 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                         try:
                             transceiver_info = line_content.replace('Transceiver:', '').strip()
                             cal_params['Transceiver'] = transceiver_info
-                        except:
+                        except (IndexError, ValueError):
                             pass
                         continue
                     elif (line_content.startswith('Data deviation') or 
@@ -378,8 +384,6 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                 else:
                     print(f"      {param}: {value:.0f}")
 
-        # sorted_cal_data_list = sorted(cal_data_list, key=lambda cal_params: cal_params['frequency'])
-
         # Sort by provided frequencies instead of ascending order
         # Create a mapping from each frequency to its index (its sort position)
         freq_to_index_map = {freq: i for i, freq in enumerate(nc_frequencies)}
@@ -543,7 +547,7 @@ def extract_calibration_params_from_EK80_xml(cal_folder, output_logs_folder=None
                         # Parse ISO format datetime, extract date portion
                         dt_str = time_elem.text.split('T')[0]
                         cal_params['Date'] = dt_str
-                    except:
+                    except (IndexError, ValueError):
                         cal_params['Date'] = time_elem.text
                 
                 # Transducer info
@@ -1277,7 +1281,7 @@ def extract_and_convert_calibration_params(cal_folder, nc_frequencies=None, outp
                                     nc_frequencies.append(freq)
                                     break
                             break
-                except:
+                except (ValueError, IndexError, OSError):
                     pass
             nc_frequencies = sorted(set(nc_frequencies))
             print(f"Auto-detected frequencies: {nc_frequencies} Hz")

@@ -1,5 +1,11 @@
-# imports and variables
-import echopype as ep 
+"""Calibration extraction and pipeline orchestration.
+
+Provides functions for extracting calibration parameters from echopype
+EchoData objects, converting between standardized and comparison formats,
+and running the full calibration standardization pipeline.
+"""
+
+import echopype as ep
 from pathlib import Path
 import numpy as np
 import xarray as xr
@@ -79,7 +85,6 @@ def check_parameter_changes(parameter_data, parameter_name, channels, changes, f
                     }
                     changes.append(change_info)
                     flags["data_irregularities"]["across_pings"].append(change_info)
-                    # TODO: print change_info in human readable format:
                     print(f"WARNING: \nParameter '{change_info['parameter']}' changed on {change_info['channel']} "
                           f"at ping {change_info['ping_index']}: "
                           f"{change_info['value_before']} -> {change_info['value_after']}")
@@ -132,34 +137,6 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
                 flags[key]["across_frequencies"] = []
             if "across_pings" not in flags[key]:
                 flags[key]["across_pings"] = []
-
-    # NOTE: parameters supported by Echopype:
-
-    # env_params: 
-    #   sound speed, 
-    #   absorption, 
-    #   or precursors to calculate: temperature, salinity, and pressure
-
-    # cal_params: 
-    #    sa_correction, 
-    #    gain_correction, 
-    #    equivalent_beam_angle, 
-    #    angle_offset_alongship,
-    #    angle_offset_athwartship,
-    #    angle_sensitivity_alongship,
-    #    angle_sensitivity_athwartship,
-    #    beamwidth_alongship,
-    #    beamwidth_athwartship,
-    #    default params: impedance_transducer, impedance_transceiver, receiver_sampling_frequency
-
-    # see get_env_params_EK and get_cal_params_EK in cal_params.py
-
-
-    # TODO: 
-    # Transducer Name (beam group)
-
-    # Transceiver:
-    # Receiver Bandwidth
 
     # Sound Speed
     try:
@@ -482,7 +459,7 @@ def load_standardized_calibration_parameters(
 ):
     """Load standardized calibration files and return comparison-format parameters.
 
-    Reads the mapping YAML and single-channel calibration ``.yml`` files from
+    Reads the mapping YAML and single-channel calibration ``.yaml`` files from
     the pipeline output directory, reconstructs ``calibration_dict`` and
     ``mapping_dict``, and converts them to the ``(cal_params, env_params,
     other_params)`` structure used by
@@ -501,7 +478,7 @@ def load_standardized_calibration_parameters(
         echodata: Optional EchoData object used to guarantee channel ordering
             alignment with echopype arrays.
         single_cal_subdir: Name of the subdirectory containing single-channel
-            ``.yml`` files (default ``"single_channel_calibration_files"``).
+            ``.yaml`` files (default ``"single_channel_calibration_files"``).
         mapping_subdir: Name of the subdirectory containing the mapping YAML
             (default ``"mapping_files"``).
         mapping_filename: Name of the mapping YAML file
@@ -538,10 +515,13 @@ def load_standardized_calibration_parameters(
     # Load each referenced single-channel calibration file
     calibration_dict = {}
     for cal_key in cal_keys:
-        cal_file = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yml"
+        cal_file = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yaml"
+        if not cal_file.exists():
+            cal_file = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yml"
         if not cal_file.exists():
             raise FileNotFoundError(
-                f"Calibration file not found for key '{cal_key}': {cal_file}"
+                f"Calibration file not found for key '{cal_key}' "
+                f"(tried .yaml and .yml) in: {cal_files_dir}"
             )
         with open(cal_file, "r", encoding="utf-8") as f:
             calibration_dict[cal_key] = yaml.safe_load(f)
@@ -609,22 +589,22 @@ def print_calibration_values(echodata, params, title="Calibration Values"):
     transmit_power_units = echodata["Sonar/Beam_group1"]["transmit_power"][0][0].units
 
     beamwidth_athwartship = [f"{b:.2f}" for b in beamwidth_athwartship_num]
-    beamwidth_athwartship_units = "deg" # echodata["Sonar/Beam_group1"]["beamwidth_twoway_athwartship"][0].units
+    beamwidth_athwartship_units = "deg"
 
     beamwidth_alongship = [f"{b:.2f}" for b in beamwidth_alongship_num]
-    beamwidth_alongship_units = "deg" # echodata["Sonar/Beam_group1"]["beamwidth_twoway_alongship"][0].units
+    beamwidth_alongship_units = "deg"
 
     angle_offset_athwartship = [f"{a:.2f}" for a in angle_offset_athwartship_num]
-    angle_offset_athwartship_units = "deg" # echodata["Sonar/Beam_group1"]["angle_offset_athwartship"][0].units
+    angle_offset_athwartship_units = "deg"
 
     angle_offset_alongship = [f"{a:.2f}" for a in angle_offset_alongship_num]
-    angle_offset_alongship_units = "deg" # echodata["Sonar/Beam_group1"]["angle_offset_alongship"][0].units
+    angle_offset_alongship_units = "deg"
 
     angle_sensitivity_athwartship = [f"{a:.2f}" for a in angle_sensitivity_athwartship_num]
-    angle_sensitivity_athwartship_units = "unitless" # echodata["Sonar/Beam_group1"]["angle_sensitivity_athwartship"][0].units
+    angle_sensitivity_athwartship_units = "unitless"
 
     angle_sensitivity_alongship = [f"{a:.2f}" for a in angle_sensitivity_alongship_num]
-    angle_sensitivity_alongship_units = "unitless" # echodata["Sonar/Beam_group1"]["angle_sensitivity_alongship"][0].units
+    angle_sensitivity_alongship_units = "unitless"
 
     # Sound Speed
     frequency_nominal = [f"{fn:.0f}" for fn in frequency_nominal_num]
@@ -643,23 +623,16 @@ def print_calibration_values(echodata, params, title="Calibration Values"):
         transmit_duration = [f"{td:.6f}" for td in transmit_duration_num]
         transmit_duration_units = echodata["Sonar/Beam_group1"].transmit_duration_nominal.units
 
-    # gain correction
-
-    # NOTE: assuming gain and sa units defined in sonar group also apply to Vendor_specific group
     gain_correction_units = echodata["Sonar/Beam_group1"].gain_correction.units
     gain_correction = [f"{gc:.2f}" for gc in gain_correction_num]
 
-    # sa correction
-    # NOTE: hardcoded units for sa correction
     sa_correction_units = "dB"
     sa_correction = [f"{sa:.2f}" for sa in sa_correction_num]
 
     # equivalent_beam_angle
     equivalent_beam_angle = [f"{eba:.2f}" for eba in equivalent_beam_angle_num]
 
-    # echopype BUG: equivalent beam angle data is in dB re sr, but units just say "sr" for steradians
-    # ICES convention is to express in sr directly, which requires conversion
-    equivalent_beam_angle_units_BUG = echodata["Sonar/Beam_group1"].equivalent_beam_angle.units
+    # echopype reports units as "sr", but the values are in dB re 1 sr
     equivalent_beam_angle_units = "dB re sr"
 
 
@@ -741,7 +714,7 @@ def generate_standardized_cal_mapping(
     Steps performed:
       1. Read raw file configurations and save to YAML.
       2. Parse manufacturer calibration files (EK60/EK80), validate, and save
-         each channel as an individual single-channel .yml file.
+         each channel as an individual single-channel .yaml file.
       3. Load single-channel files, match raw channels to calibration data,
          handle unused files, resolve conflicts, and save mapping files.
       4. Verify that all required calibration parameters are present and that
@@ -799,7 +772,9 @@ def generate_standardized_cal_mapping(
     # This allows the "error" conflict-resolution workflow: after a conflict
     # is raised, the user deletes the unwanted file(s) and re-runs the cell
     # without Steps 1-2 regenerating them.
-    existing_cal_files = list(single_cal_output.glob("*.yml"))
+    existing_cal_files = (
+        list(single_cal_output.glob("*.yaml")) + list(single_cal_output.glob("*.yml"))
+    )
     if existing_cal_files:
         if verbose:
             print(f"Found {len(existing_cal_files)} existing single-channel calibration "
@@ -844,7 +819,7 @@ def generate_standardized_cal_mapping(
             print("\n" + "=" * 80)
             print("Single-channel calibration files:")
             print("=" * 80)
-            for f in sorted(single_cal_output.glob("*.yml")):
+            for f in sorted(single_cal_output.glob("*.yaml")):
                 size_kb = f.stat().st_size / 1024
                 print(f"  {f.name} ({size_kb:.1f} KB)")
 

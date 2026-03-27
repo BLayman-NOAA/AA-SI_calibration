@@ -14,7 +14,7 @@ Example usage:
     
     # Load data
     raw_configs = load_raw_configs("path/to/raw_configs.yaml")
-    cal_data = load_calibration_data("path/to/calibration.yml")
+    cal_data = load_calibration_data("path/to/calibration.yaml")
     
     # Build mapping
     result = build_mapping(raw_configs, cal_data)
@@ -467,7 +467,7 @@ def load_calibration_data_from_single_files(
     """
     Load calibration data from a directory of single-channel YAML files.
     
-    Each .yml file in the directory is expected to contain a flat dictionary
+    Each .yaml/.yml file in the directory is expected to contain a flat dictionary
     of calibration parameters for one channel (the same format produced by
     save_individual_calibration_files or save_single_channel_files).
     
@@ -475,10 +475,10 @@ def load_calibration_data_from_single_files(
     ``{"channels": [<channel_dict>, ...]}`` so it can be passed directly
     to build_mapping().
     
-    File names do not matter as long as they are unique and end with .yml.
+    File names do not matter as long as they are unique and end with .yaml or .yml.
     
     Args:
-        cal_files_dir: Path to the directory containing single-channel .yml files
+        cal_files_dir: Path to the directory containing single-channel .yaml/.yml files
         verbose: If True, print progress messages
     
     Returns:
@@ -490,11 +490,13 @@ def load_calibration_data_from_single_files(
         raise FileNotFoundError(f"Calibration files directory not found: {cal_files_dir}")
     
     channels = []
-    yml_files = sorted(cal_files_dir.glob("*.yml"))
-    
+    yml_files = sorted(
+        list(cal_files_dir.glob("*.yaml")) + list(cal_files_dir.glob("*.yml"))
+    )
+
     if not yml_files:
         raise FileNotFoundError(
-            f"No .yml files found in {cal_files_dir}. "
+            f"No .yaml or .yml files found in {cal_files_dir}. "
             "Expected single-channel calibration YAML files."
         )
     
@@ -962,7 +964,7 @@ def handle_unused_calibration_files(
         result: MappingResult from :func:`build_mapping`.
         calibration_data: The calibration data dict returned by
             :func:`load_calibration_data_from_single_files`.
-        cal_files_dir: Directory containing the single-channel ``.yml`` files.
+        cal_files_dir: Directory containing the single-channel ``.yaml`` files.
         keep_unused: If True, move unused files to *unused_dir* instead of
             deleting them.
         unused_dir: Destination directory for unused files when *keep_unused*
@@ -1000,11 +1002,11 @@ def handle_unused_calibration_files(
                 print(f"  - {src}")
 
     # Identify unused standardized calibration files on disk
-    referenced_filenames = {
-        f"{calibration_key_to_filename(k)}.yml" for k in referenced_keys
-    }
-    all_cal_files = sorted(cal_files_dir.glob("*.yml"))
-    unused_files = [f for f in all_cal_files if f.name not in referenced_filenames]
+    referenced_stems = {calibration_key_to_filename(k) for k in referenced_keys}
+    all_cal_files = sorted(
+        list(cal_files_dir.glob("*.yaml")) + list(cal_files_dir.glob("*.yml"))
+    )
+    unused_files = [f for f in all_cal_files if f.stem not in referenced_stems]
 
     for f in unused_files:
         _remove_or_move_file(f, keep_unused, unused_dir)
@@ -1033,7 +1035,7 @@ def resolve_conflicts_interactive(
 
     Args:
         result: MappingResult from :func:`build_mapping` (modified in-place).
-        cal_files_dir: Directory containing the single-channel ``.yml`` files.
+        cal_files_dir: Directory containing the single-channel ``.yaml`` files.
         keep_unused: If True, move rejected files to *unused_dir*.
         unused_dir: Destination directory for rejected files.
     """
@@ -1073,7 +1075,7 @@ def resolve_conflicts_interactive(
             cal_data = result.calibration_dict.get(cal_key, {})
             cal_date = cal_data.get('calibration_date', 'unknown')
             src_files = cal_data.get('source_filenames', ['unknown'])
-            print(f"  [{i}] {cal_key}.yml")
+            print(f"  [{i}] {cal_key}.yaml")
             print(f"      calibration_date: {cal_date}  |  source: {src_files}")
 
         while True:
@@ -1089,14 +1091,14 @@ def resolve_conflicts_interactive(
         rejected_keys = [k for k in options if k != kept_key]
         keys_to_remove.update(rejected_keys)
 
-        print(f"\n  Keeping: {kept_key}.yml")
+        print(f"\n  Keeping: {kept_key}.yaml")
         action_word = "Moving" if keep_unused else "Deleting"
         for rk in rejected_keys:
-            print(f"  {action_word}: {rk}.yml")
+            print(f"  {action_word}: {rk}.yaml")
 
     # Remove/move rejected calibration files from disk
     for cal_key in keys_to_remove:
-        fname = f"{calibration_key_to_filename(cal_key)}.yml"
+        fname = f"{calibration_key_to_filename(cal_key)}.yaml"
         cal_file = cal_files_dir / fname
         if cal_file.exists():
             _remove_or_move_file(cal_file, keep_unused, unused_dir)
@@ -1164,7 +1166,7 @@ def check_for_conflicts(result: MappingResult, cal_files_dir: str | Path = None)
             cal_data = result.calibration_dict.get(cal_key, {})
             cal_date = cal_data.get('calibration_date', 'unknown')
             src_files = cal_data.get('source_filenames', ['unknown'])
-            print(f"  - {cal_key}.yml")
+            print(f"  - {cal_key}.yaml")
             print(f"    calibration_date: {cal_date}  |  source: {src_files}")
         print(f"\nAffected channel ID(s):")
         for cid in unique_channel_ids:
@@ -1249,17 +1251,17 @@ def verify_calibration_file_usage(
     Args:
         calibration_dict: Maps calibration key -> calibration data dict
             (the keys currently in use).
-        cal_files_dir: Directory containing single-channel ``.yml`` files.
+        cal_files_dir: Directory containing single-channel ``.yaml`` files.
 
     Returns:
         List of unused file Paths. An empty list means all files are used.
     """
     cal_files_dir = Path(cal_files_dir)
-    used_filenames = {
-        f"{calibration_key_to_filename(k)}.yml" for k in calibration_dict
-    }
-    all_cal_files = sorted(cal_files_dir.glob("*.yml"))
-    unused_files = [f for f in all_cal_files if f.name not in used_filenames]
+    used_stems = {calibration_key_to_filename(k) for k in calibration_dict}
+    all_cal_files = sorted(
+        list(cal_files_dir.glob("*.yaml")) + list(cal_files_dir.glob("*.yml"))
+    )
+    unused_files = [f for f in all_cal_files if f.stem not in used_stems]
 
     print("=" * 80)
     print("CALIBRATION FILE USAGE CHECK")
