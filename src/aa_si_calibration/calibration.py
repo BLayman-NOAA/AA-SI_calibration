@@ -632,7 +632,7 @@ def print_calibration_values(echodata, params, title="Calibration Values"):
     # equivalent_beam_angle
     equivalent_beam_angle = [f"{eba:.2f}" for eba in equivalent_beam_angle_num]
 
-    # echopype reports units as "sr", but the values are in dB re 1 sr
+    # ICES convention is tu use "sr" for units, but the values are stored in dB re 1 sr
     equivalent_beam_angle_units = "dB re sr"
 
 

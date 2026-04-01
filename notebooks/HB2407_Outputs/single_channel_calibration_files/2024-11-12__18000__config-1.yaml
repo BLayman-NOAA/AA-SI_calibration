@@ -1,5 +1,5 @@
-"source_filenames": ["CalibrationDataFile-D20230720-T225417-18CW.xml"]
-"record_created": "2026-03-23T18:36:15.102645+00:00"
+"source_filenames": ["CalibrationDataFile-D20241112-T040149-018kHz.xml"]
+"record_created": "2026-03-30T23:25:43.760266+00:00"
 "record_author": "Placeholder Author"
 "channel": "ES18 Serial No: 0"
 "transceiver_id": "400479"
@@ -18,13 +18,13 @@
 "transmit_power": 1000.0
 "transmit_duration_nominal": 0.001024
 "multiplexing_found": null
-"calibration_date": "2023-07-20"
+"calibration_date": "2024-11-12"
 "calibration_comments": "\n    "
 "calibration_version": null
-"absorption_indicative": 0.002661
-"sound_speed_indicative": 1526.5
-"temperature": 10.0
-"salinity": 35.0
+"absorption_indicative": 0.002383
+"sound_speed_indicative": 1492.36
+"temperature": 12.0
+"salinity": 32.0
 "acidity": 8.0
 "pressure": null
 "sample_interval": 2.8e-05
@@ -35,18 +35,18 @@
 "sphere_material": "tungsten carbide"
 "source_file_type": ".xml"
 "source_file_location": null
-"sonar_software_version": "21.15.2.0"
+"sonar_software_version": "23.6.0.0"
 "sonar_software_name": "EK80"
 "equivalent_beam_angle": -17.0
-"gain_correction": [22.99]
-"sa_correction": [-0.0262]
+"gain_correction": [23.14]
+"sa_correction": [0.2092]
 "frequency": [18000.0]
-"beamwidth_transmit_major": [10.45]
-"beamwidth_receive_major": [10.45]
-"beamwidth_transmit_minor": [10.44]
-"beamwidth_receive_minor": [10.44]
-"echoangle_major": [-0.24]
-"echoangle_minor": [-0.33]
+"beamwidth_transmit_major": [11.01]
+"beamwidth_receive_major": [11.01]
+"beamwidth_transmit_minor": [10.09]
+"beamwidth_receive_minor": [10.09]
+"echoangle_major": [-0.16]
+"echoangle_minor": [-0.36]
 "echoangle_major_sensitivity": null
 "echoangle_minor_sensitivity": null
 "source_file_paths": null

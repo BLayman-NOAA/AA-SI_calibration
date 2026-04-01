@@ -1,5 +1,5 @@
-"source_filenames": ["CalibrationDataFile-D20230720-T192325_70cw_onaxis.xml"]
-"record_created": "2026-03-23T18:36:15.102645+00:00"
+"source_filenames": ["CalibrationDataFile-D20241112-T040149-070kHz.xml"]
+"record_created": "2026-03-30T23:25:43.760266+00:00"
 "record_author": "Placeholder Author"
 "channel": "ES70-7C Serial No: 0"
 "transceiver_id": "400503"
@@ -18,13 +18,13 @@
 "transmit_power": 750.0
 "transmit_duration_nominal": 0.001024
 "multiplexing_found": null
-"calibration_date": "2023-07-20"
+"calibration_date": "2024-11-12"
 "calibration_comments": "\n    "
 "calibration_version": null
-"absorption_indicative": 0.022773
-"sound_speed_indicative": 1526.5
-"temperature": 10.0
-"salinity": 35.0
+"absorption_indicative": 0.022024
+"sound_speed_indicative": 1492.36
+"temperature": 12.0
+"salinity": 32.0
 "acidity": 8.0
 "pressure": null
 "sample_interval": 4.8e-05
@@ -35,18 +35,18 @@
 "sphere_material": "tungsten carbide"
 "source_file_type": ".xml"
 "source_file_location": null
-"sonar_software_version": "21.15.2.0"
+"sonar_software_version": "23.6.0.0"
 "sonar_software_name": "EK80"
 "equivalent_beam_angle": -20.7
-"gain_correction": null
-"sa_correction": null
-"frequency": null
-"beamwidth_transmit_major": null
-"beamwidth_receive_major": null
-"beamwidth_transmit_minor": null
-"beamwidth_receive_minor": null
-"echoangle_major": null
-"echoangle_minor": null
+"gain_correction": [27.54]
+"sa_correction": [-0.0532]
+"frequency": [70000.0]
+"beamwidth_transmit_major": [6.67]
+"beamwidth_receive_major": [6.67]
+"beamwidth_transmit_minor": [6.41]
+"beamwidth_receive_minor": [6.41]
+"echoangle_major": [-0.02]
+"echoangle_minor": [0.01]
 "echoangle_major_sensitivity": null
 "echoangle_minor_sensitivity": null
 "source_file_paths": null
