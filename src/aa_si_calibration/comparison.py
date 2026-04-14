@@ -72,8 +72,7 @@ def calculate_full_dataset_effect(ds_modified, ds_baseline, parameter_name, outp
     # Calculate difference across all data
     diff_data = ds_modified['Sv'] - ds_baseline['Sv']
     
-    print(f"\n {parameter_name.upper()}")
-    print("="*60)
+    print(f"\n{parameter_name}")
     print("Freq     | Mean Effect | Median Effect | Max Absolute Effect | Absolute 95th %ile | Valid Points")
     print("-" * 78)
     
@@ -158,9 +157,7 @@ def verify_additive_effects(gain_results, sa_results, eba_results, sound_speed_r
         dict: Verification statistics for each frequency.
     """
     
-    print("="*80)
-    print("\nVERIFICATION: DO INDIVIDUAL EFFECTS ADD UP TO COMBINED EFFECT?")
-    print("="*80)
+    print("\nVerification: do individual effects add up to combined effect?")
     print()
     
     verification_results = {}
@@ -270,7 +267,6 @@ def verify_additive_effects(gain_results, sa_results, eba_results, sound_speed_r
     else:
         print("No valid verification data available.")
     
-    print("="*80)
     print()
     
     return verification_results
@@ -388,9 +384,7 @@ def compare_calibration_parameters(report_params, original_params, echodata):
                 print(f"{val:>{col_width}}", end="  ")
             print()
 
-    print("="*80)
-    print("CALIBRATION PARAMETER COMPARISON")
-    print("="*80)
+    print("\nCalibration parameter comparison:")
     print()
     
     # Define parameters to compare
@@ -429,9 +423,7 @@ def compare_calibration_parameters(report_params, original_params, echodata):
                 print(f"  Original value:  {orig_params[param_name]}")
         print()
 
-    print("\n" + "="*80)
-    print("OTHER PARAMETER COMPARISON (String Parameters)")
-    print("="*80)
+    print("\nOther parameter comparison (string parameters):")
     print()
     
     # Compare string parameters (excluding report-specific ones)
@@ -466,9 +458,7 @@ def compare_calibration_parameters(report_params, original_params, echodata):
                 print(f"  Original value:  {original_other_params[param_name]}")
         print()
 
-    print("\n" + "="*80)
-    print("CALIBRATION REPORT SPECIFIC PARAMETERS")
-    print("="*80)
+    print("\nCalibration report specific parameters:")
     print()
     
     # Display report-specific parameters without comparison
@@ -480,7 +470,7 @@ def compare_calibration_parameters(report_params, original_params, echodata):
             print(f"  Report value: {report_other_params[param_name]}")
             print()
     
-    print("="*80)
+    print()
 
 
 def perform_range_analysis(ds_Sv_baseline, ds_Sv_calibrated, echodata, title):
@@ -497,9 +487,7 @@ def perform_range_analysis(ds_Sv_baseline, ds_Sv_calibrated, echodata, title):
         title (str): Title for the analysis output
     """
     # RANGE DEPENDENCY ANALYSIS
-    print("="*90)
-    print(f"         {title}")
-    print("="*90)
+    print(f"\n{title}")
 
     # Test at multiple range samples to show how absorption effects grow with distance
     test_range_samples = [50, 200, 400, 600, 800]  # range_sample indices to test (not actual depth)

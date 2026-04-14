@@ -1,13 +1,5 @@
 # -*- coding: utf-8 -*-
-'''
-Common custom error used in the WCSD Packager file readers
-
-Created by Chuck Anderson <charles.anderson@noaa.gov>
-NOAA National Centers for Environmental Information
-
-
-Revised 6/2016
-'''
+'''Custom exceptions for the WCSD Packager file readers.'''
 class ReaderErrors(Exception):
     """Base class for custom reader exceptions"""
     pass

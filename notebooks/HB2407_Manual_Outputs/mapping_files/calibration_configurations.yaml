@@ -1,23 +1,18 @@
-# =============================================================================
-# CALIBRATION CONFIGURATIONS - FILL IN VALUES BELOW
-# =============================================================================
-# This file contains ALL calibration templates in a single file.
-# You can edit EITHER this file OR the individual files in:
+# Calibration configurations
+# This file contains all calibration templates in a single file.
+# You can edit either this file or the individual files in:
 #   Single_Channel_Calibration_Templates/
 #
 # After filling in values, run Step 6 to generate final mapping files.
 #
-# PARAMETER KEY:
-# - [MAPPING] = Do not modify (used for matching)
-# - [REQUIRED] = Required for Sv/TS calibration
-# - [REQUIRED-Sv] = Required for Sv only
-# - [REQUIRED*] = Required OR provide T/S/P/acidity instead
-# - [ECHOPYPE-ENV] = Used to calculate sound_speed/absorption
-# - [OPTIONAL] = Optional metadata
-# =============================================================================
+# Parameter key:
+#   [MAPPING]    = Do not modify (used for matching)
+#   [REQUIRED]   = Required for Sv/TS calibration
+#   [REQUIRED*]  = Required OR provide T/S/P/acidity instead
+#   [OPTIONAL]   = Optional metadata
 
 2026-02-18__120000__config-1:
-  record_created: "2026-03-30T23:28:51.979177+00:00"
+  record_created: "2026-04-14T17:00:33.675154+00:00"
   record_author: "Placeholder Author"
   channel: "WBT 400517-15 ES120-7C_ES"  # [MAPPING] Channel identifier
   transceiver_id: "400517"  # [MAPPING] Transceiver ID
@@ -77,7 +72,7 @@
   sonar_software_name: null
 
 2026-02-18__18000__config-1:
-  record_created: "2026-03-30T23:28:51.979177+00:00"
+  record_created: "2026-04-14T17:00:33.675154+00:00"
   record_author: "Placeholder Author"
   channel: "WBT 400479-15 ES18_ES"  # [MAPPING] Channel identifier
   transceiver_id: "400479"  # [MAPPING] Transceiver ID
@@ -137,7 +132,7 @@
   sonar_software_name: null
 
 2026-02-18__200000__config-1:
-  record_created: "2026-03-30T23:28:51.979177+00:00"
+  record_created: "2026-04-14T17:00:33.675154+00:00"
   record_author: "Placeholder Author"
   channel: "WBT 400509-15 ES200-7C_ES"  # [MAPPING] Channel identifier
   transceiver_id: "400509"  # [MAPPING] Transceiver ID
@@ -197,7 +192,7 @@
   sonar_software_name: null
 
 2026-02-18__38000__config-1:
-  record_created: "2026-03-30T23:28:51.979177+00:00"
+  record_created: "2026-04-14T17:00:33.675154+00:00"
   record_author: "Placeholder Author"
   channel: "WBT 400528-15 ES38-7_ES"  # [MAPPING] Channel identifier
   transceiver_id: "400528"  # [MAPPING] Transceiver ID
@@ -257,7 +252,7 @@
   sonar_software_name: null
 
 2026-02-18__70000__config-1:
-  record_created: "2026-03-30T23:28:51.979177+00:00"
+  record_created: "2026-04-14T17:00:33.675154+00:00"
   record_author: "Placeholder Author"
   channel: "WBT 400503-15 ES70-7C_ES"  # [MAPPING] Channel identifier
   transceiver_id: "400503"  # [MAPPING] Transceiver ID

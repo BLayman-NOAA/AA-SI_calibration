@@ -7,7 +7,7 @@ import re
 # Path to the JSON schema for standardized calibration files
 SCHEMA_PATH = Path(__file__).parent / "schema" / "standardized_calibration_file_schema.json"
 
-# Regex matching hex-like serial number substrings (10–16 hex chars)
+# Regex matching hex-like serial number substrings (10-16 hex chars)
 SERIAL_NUMBER_PATTERN = re.compile(r"\b[0-9A-Fa-f]{10,16}\b")
 
 # Regex extracting the nominal CW frequency (kHz) from transducer model names

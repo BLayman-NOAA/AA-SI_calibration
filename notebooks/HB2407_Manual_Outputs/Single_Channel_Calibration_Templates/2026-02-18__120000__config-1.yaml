@@ -1,36 +1,31 @@
-# =============================================================================
-# CALIBRATION TEMPLATE - FILL IN VALUES BELOW
-# =============================================================================
-# This file was auto-generated from raw file channel configurations.
+# Calibration template
+# Auto-generated from raw file channel configurations.
 #
-# Please note: most of these parameters use the SONAR-netCDF4 v2.1 naming conventions and definitions:
+# Most parameters use SONAR-netCDF4 v2.1 naming conventions:
 # https://htmlpreview.github.io/?https://github.com/ices-publications/SONAR-netCDF4/blob/master/Formatted_docs/crr341.html
 #
-# For a guide to YAML formatting and supported syntax, please see:
+# YAML formatting guide:
 # https://docs.ansible.com/projects/ansible/latest/reference_appendices/YAMLSyntax.html
-# 
-# INSTRUCTIONS:
-# 1. Ensure that calibration date from configuration is correct: 2026-02-18. If not, modify the calibration_date field.
+#
+# Instructions:
+# 1. Verify calibration date is correct: 2026-02-18
 # 2. Fill in core calibration values: gain_correction, sa_correction, equivalent_beam_angle
 # 3. Fill in environmental parameters OR temperature/salinity/pressure to calculate them
 # 4. Fill in beam parameters and optional fields
 #
-# IMPORTANT: Do not modify the channel identification parameters at the top
-# (transceiver_id, transducer_model, pulse_form, frequency_*, transmit_power, 
+# Do not modify the channel identification parameters at the top
+# (transceiver_id, transducer_model, pulse_form, frequency_*, transmit_power,
 # transmit_duration_nominal) as these are used for matching to raw files.
 #
-# PARAMETER REQUIREMENTS:
-# - [MAPPING] = Required for matching calibration to raw files (do not modify if provided)
-# - [REQUIRED] = Required for calibration
-# - [OPTIONAL] = Optional
+# Parameter requirements:
+#   [MAPPING]  = Required for matching calibration to raw files (do not modify)
+#   [REQUIRED] = Required for calibration
+#   [OPTIONAL] = Optional
 #
-# NAMING THIS FILE:
-# Make sure that each calibration file has a unique name.
-# It's recommended that you use the following format: YYYY-MM-DD_<frequency in Hz>_<unique configuration id per frequency>
-#
-# =============================================================================
+# File naming: use a unique name, recommended format:
+# YYYY-MM-DD_<frequency in Hz>_<unique configuration id per frequency>
 
-record_created: "2026-03-30T23:28:51.979177+00:00" # automatically populated when record is created
+record_created: "2026-04-14T17:00:33.675154+00:00" # automatically populated when record is created
 record_author: "Placeholder Author" # Name of person or organization who authored this file
 channel: "WBT 400517-15 ES120-7C_ES"  # Channel identifier
 transceiver_id: "400517"  # [MAPPING] Transceiver ID for matching
@@ -41,7 +36,7 @@ transceiver_number: 4
 transceiver_port: 15
 channel_instance_number: 1
 transducer_model: "ES120-7C"  # [MAPPING] Transducer model for matching
-transducer_serial_number: null # [MAPPING] Note: ideally this field is provided for mapping, but will be ignored if missing.
+transducer_serial_number: null # [MAPPING] Ideally provided for mapping, ignored if missing.
 pulse_form: "0"  # [MAPPING] Pulse form (0=CW, 1=FM) for matching
 frequency_start: 120000.0  # [MAPPING] Start frequency for matching
 frequency_end: 120000.0  # [MAPPING] End frequency for matching
@@ -51,51 +46,39 @@ transmit_power: 250.0  # [MAPPING] Transmit power for matching
 transmit_duration_nominal: 0.001024  # [MAPPING] Pulse duration for matching
 multiplexing_found: false
 
-# -----------------------------------------------------------------------------
-# CALIBRATION METADATA
-# -----------------------------------------------------------------------------
-calibration_date: "2026-02-18"  # [REQUIRED] Date of calibration in YYYY-MM-DD (can be generated from user config)
+# Calibration metadata
+calibration_date: "2026-02-18"  # [REQUIRED] Date of calibration (YYYY-MM-DD)
 calibration_comments: null  # [OPTIONAL] Notes about calibration
 calibration_version: null  # [OPTIONAL] Calibration version identifier
 
-# -----------------------------------------------------------------------------
-# CORE CALIBRATION PARAMETERS
-# -----------------------------------------------------------------------------
+# Core calibration parameters
 gain_correction: [null]  # [REQUIRED] Transducer gain correction (dB)
-sa_correction: [null]  # [REQUIRED] Sa correction factor (dB) - Note: only used in Sv calculation
-equivalent_beam_angle: null  # [REQUIRED] (dB re sr). Note: only used in Sv calculation
+sa_correction: [null]  # [REQUIRED] Sa correction factor (dB). Only used in Sv calculation
+equivalent_beam_angle: null  # [REQUIRED] (dB re sr). Only used in Sv calculation
 
-# -----------------------------------------------------------------------------
-# ENVIRONMENTAL PARAMETERS
+# Environmental parameters
 # Option A: Provide sound_speed and absorption directly
-# Option B: Provide temperature, salinity, pressure, acidity 
-# -----------------------------------------------------------------------------
+# Option B: Provide temperature, salinity, pressure, acidity
 absorption_indicative: null  # [REQUIRED*] Sound absorption coefficient (dB/m) - *or provide T/S/P/acidity
 sound_speed_indicative: null  # [REQUIRED*] Sound speed (m/s) - *or provide T/S/P/acidity
 
-# -----------------------------------------------------------------------------
-# PHYSICAL ENVIRONMENT - These can be used to calculate sound_speed/absorption
-# -----------------------------------------------------------------------------
+# Physical environment (can be used to calculate sound_speed/absorption)
 temperature: null  # [OPTIONAL] Water temperature (deg C) - used to calculate sound_speed & absorption
 salinity: null  # [OPTIONAL] Water salinity (PSU) - used to calculate sound_speed & absorption
 acidity: null  # [OPTIONAL] Water pH (acidity) - used to calculate absorption (default 8.1 if not provided)
 pressure: null  # [OPTIONAL] Water pressure (dbar) - used to calculate sound_speed & absorption
 
-# -----------------------------------------------------------------------------
-# BEAM PARAMETERS - Note: Not currently supported as user parameters in Echopype (extracted from raw)
-# -----------------------------------------------------------------------------
+# Beam parameters (not currently supported as user parameters in Echopype)
 beamwidth_transmit_major: [null]  # [REQUIRED] Transmit beamwidth major axis (degrees)
 beamwidth_receive_major: [null]  # [REQUIRED] Receive beamwidth major axis (degrees)
 beamwidth_transmit_minor: [null]  # [REQUIRED] Transmit beamwidth minor axis (degrees)
 beamwidth_receive_minor: [null]  # [REQUIRED] Receive beamwidth minor axis (degrees)
 echoangle_major: [null]  # [REQUIRED] Echo angle offset major axis (degrees)
 echoangle_minor: [null]  # [REQUIRED] Echo angle offset minor axis (degrees)
-echoangle_major_sensitivity: [null]  # [OPTIONAL] Angle sensitivity major axis (electrical deg per mechanical deg).  Note: only used in TS calculation.
-echoangle_minor_sensitivity: [null]  # [OPTIONAL] Angle sensitivity minor axis (electrical deg per mechanical deg). Note: only used in TS calculation.
+echoangle_major_sensitivity: [null]  # [OPTIONAL] Angle sensitivity major axis
+echoangle_minor_sensitivity: [null]  # [OPTIONAL] Angle sensitivity minor axis
 
-# -----------------------------------------------------------------------------
-# OPTIONAL RAW CONFIGURATION PARAMETERS
-# -----------------------------------------------------------------------------
+# Optional raw configuration parameters
 # sample_interval: Stored per-ping in raw file. Used by echopype to calculate range
 # (range = range_sample * sample_interval * sound_speed / 2). Not needed for mapping.
 sample_interval: null
@@ -104,9 +87,7 @@ sample_interval: null
 # and frequency. For FM: approximately (frequency_end - frequency_start).
 transmit_bandwidth: null
 
-# -----------------------------------------------------------------------------
-# CALIBRATION PROVENANCE - Optional metadata
-# -----------------------------------------------------------------------------
+# Calibration provenance
 calibration_acquisition_method: null  # [OPTIONAL] Method (e.g., sphere, in-situ)
 sphere_diameter: null  # [OPTIONAL] Calibration sphere diameter (mm)
 sphere_material: null  # [OPTIONAL] Sphere material (e.g., tungsten carbide, copper)

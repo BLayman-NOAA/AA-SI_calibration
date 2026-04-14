@@ -42,9 +42,7 @@ def detect_instrument_type(raw_path):
     return "UNKNOWN"
 
 
-# =============================================================================
-# Source Location Documentation
-# =============================================================================
+# Source location documentation
 
 EK60_SOURCES = {
     "channel_id": (
@@ -169,10 +167,6 @@ GPS_SOURCES = {
 }
 
 
-# =============================================================================
-# Utility Functions
-# =============================================================================
-
 def _clean_value(value):
     """Recursively clean bytes/bytearray values to decoded strings."""
     if isinstance(value, (bytes, bytearray)):
@@ -229,11 +223,6 @@ def save_yaml(data, output_path):
         )
 
 
-
-# =============================================================================
-# Timestamp Utilities
-# =============================================================================
-
 def nt_to_datetime(nt_timestamp):
     """Convert 64-bit NT timestamp to Python datetime (UTC)."""
     microseconds = nt_timestamp / 10
@@ -249,10 +238,6 @@ def truncate_to_milliseconds(dt):
     truncated_microseconds = (dt.microsecond // 1000) * 1000
     return dt.replace(microsecond=truncated_microseconds)
 
-
-# =============================================================================
-# XML Parsing (EK80)
-# =============================================================================
 
 def _xml_element_to_dict(elem):
     """Convert an lxml Element to a nested dictionary."""
@@ -340,10 +325,6 @@ def prune_frequencypar_nodes(node, _seen_channels=None):
             pruned["children"] = kept
     return pruned
 
-
-# =============================================================================
-# GPS/NMEA Data Extraction
-# =============================================================================
 
 def parse_nmea_latlon(nmea_string):
     """Parse latitude and longitude from an NMEA sentence string.
@@ -539,10 +520,6 @@ def extract_gps_data(raw_path):
     }
 
 
-# =============================================================================
-# Datagram Timestamp Extraction
-# =============================================================================
-
 def extract_datagram_timestamps(raw_path):
     """Extract timestamps from EK60 raw file datagrams.
     
@@ -658,10 +635,6 @@ def extract_ek80_datagram_timestamps(raw_path):
         "raw3_count": raw3_count,
     }
 
-
-# =============================================================================
-# File Configuration Extraction
-# =============================================================================
 
 def extract_ek60_file_config(raw_path, reader, metadata=None):
     """Extract EK60 file configuration for calibration matching.
@@ -982,10 +955,6 @@ def _safe_int(value):
     except (ValueError, TypeError):
         return None
 
-
-# =============================================================================
-# Unique Channel Extraction (for manual pipeline)
-# =============================================================================
 
 def process_raw_folder(raw_input_folder, verbose=True):
     """Process all .raw files in a folder and return sorted file configurations.

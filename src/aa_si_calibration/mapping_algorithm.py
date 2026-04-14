@@ -1,26 +1,7 @@
-"""
-Calibration Mapping Algorithm Module
+"""Match raw file channel configurations to calibration data.
 
-This module provides functionality for matching raw file channel configurations
-to their corresponding calibration data based on multiple parameters including
-transceiver ID, transducer model, pulse form, frequency range, transmit power,
-and transmit duration.
-
-Example usage:
-    from aa_si_calibration.mapping_algorithm import (
-        load_raw_configs, load_calibration_data, build_mapping,
-        get_calibration, save_mapping_files
-    )
-    
-    # Load data
-    raw_configs = load_raw_configs("path/to/raw_configs.yaml")
-    cal_data = load_calibration_data("path/to/calibration.yaml")
-    
-    # Build mapping
-    result = build_mapping(raw_configs, cal_data)
-    
-    # Get calibration for a specific file and channel
-    cal = get_calibration("filename.raw", "channel_id", result.mapping_dict, result.calibration_dict)
+Matches channels based on transceiver ID, transducer model, pulse form,
+frequency range, transmit power, and transmit duration.
 """
 
 import shutil
@@ -32,10 +13,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
 # Default numerical tolerances for field comparisons
 DEFAULT_TOLERANCES = {
     'frequency': 1.0,              # Hz - exact match expected
@@ -45,12 +22,8 @@ DEFAULT_TOLERANCES = {
     'transmit_duration_nominal': 1e-6,  # seconds - small tolerance for floating point
 }
 
-# Import string identifier conversion from standardized_file_lib
 from .standardized_file_lib import ensure_string_identifiers as _ensure_string_identifiers
 
-# Import unified calibration key, filename, and file I/O functions.
-# These are the single source of truth; this module re-exports them for
-# backward compatibility.
 from .standardized_file_lib import (
     build_calibration_key,
     calibration_key_to_filename,
@@ -61,10 +34,6 @@ from .standardized_file_lib import (
     _StandardizedFileDumper,
 )
 
-
-# =============================================================================
-# DATA CLASSES
-# =============================================================================
 
 @dataclass
 class UnmatchedChannel:
@@ -127,25 +96,19 @@ class MappingResult:
             _groups[key].append(mm)
         unique_conflicts = len(_groups)
 
-        print(f"\n{'='*60}")
-        print("MATCHING SUMMARY")
-        print(f"{'='*60}")
-        print(f"\nRaw file channels:")
-        print(f"  Total file channels processed: {self.total_channels}")
-        print(f"  Total unique channels: {self.unique_raw_channels}")
-        print(f"  Matched file channels: {self.matched_channels}")
-        print(f"  Matched unique channels: {self.unique_matched_channels}")
-        print(f"  Unmatched file channels: {len(self.unmatched_channels)}")
-        print(f"  Multiplexing warnings: {len(self.multiplexing_warnings)}")
-        print(f"\nCalibration files:")
-        print(f"  Total calibrations loaded: {self.total_calibrations_loaded}")
-        print(f"  Unique calibrations used: {len(self.calibration_dict)}")
-        print(f"  Conflicting calibration sets: {unique_conflicts}")
+        print(f"\nMatching summary:")
+        print(f"  Raw file channels:")
+        print(f"    Total processed: {self.total_channels}")
+        print(f"    Unique: {self.unique_raw_channels}")
+        print(f"    Matched: {self.matched_channels}")
+        print(f"    Matched unique: {self.unique_matched_channels}")
+        print(f"    Unmatched: {len(self.unmatched_channels)}")
+        print(f"    Multiplexing warnings: {len(self.multiplexing_warnings)}")
+        print(f"  Calibration files:")
+        print(f"    Loaded: {self.total_calibrations_loaded}")
+        print(f"    Used: {len(self.calibration_dict)}")
+        print(f"    Conflicts: {unique_conflicts}")
 
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
 
 def values_match_with_tolerance(
     raw_value: Any, 
@@ -351,8 +314,8 @@ def find_matching_calibration(
                     })
                 continue
         elif raw_tsn is None or cal_tsn is None:
-            # One or both sides missing transducer_serial_number — proceed
-            # without comparing, but track that we skipped (will warn later)
+            # One or both sides missing transducer_serial_number, proceed
+            # without comparing but track that we skipped (will warn later)
             tsn_skipped = True
             
         # Step 4: pulse_form (convert to string for comparison)
@@ -424,13 +387,6 @@ def find_matching_calibration(
     
     return matches, multiplexing_warning, failure_details, tsn_warnings
 
-
-# build_calibration_key is imported from standardized_file_lib above.
-
-
-# =============================================================================
-# MAIN FUNCTIONS
-# =============================================================================
 
 def load_raw_configs(file_path: str | Path) -> List[Dict[str, Any]]:
     """
@@ -664,7 +620,7 @@ def build_mapping(
                     _print_failure_summary(raw_channel, failure_details, calibration_channels)
                     
             elif len(matches) > 1:
-                # Multiple matches found — collect all matching keys
+                # Multiple matches found, collect all matching keys
                 match_cal_keys = []
                 for m in matches:
                     ck = m.get('_calibration_file_key') or build_calibration_key(m)
@@ -723,13 +679,6 @@ def get_calibration(
     return calibration_dict.get(cal_key)
 
 
-# get_calibration_from_file is imported from standardized_file_lib above.
-
-
-# =============================================================================
-# OUTPUT FUNCTIONS
-# =============================================================================
-
 def save_mapping_files(
     result: MappingResult,
     output_dir: str | Path,
@@ -771,7 +720,7 @@ def save_mapping_files(
     if short_filenames:
         # If the keys already came from single-channel filenames (i.e.
         # _calibration_file_key matches the dict key for every entry),
-        # they are already short — skip re-remapping which would
+        # they are already short, skip re-remapping which would
         # incorrectly renumber them after unused files were deleted.
         keys_already_short = all(
             cd.get('_calibration_file_key') == ck
@@ -841,23 +790,17 @@ def print_mapping_preview(result: MappingResult):
     Args:
         result: MappingResult from build_mapping()
     """
-    print("MAPPING DICTIONARY PREVIEW")
-    print("=" * 60)
+    print("Mapping dictionary:")
     for filename, channels in result.mapping_dict.items():
         print(f"\n{filename}:")
         for channel_id, cal_key in channels.items():
             print(f"  {channel_id}")
             print(f"    -> {cal_key}")
     
-    print(f"\n\nCALIBRATION DICTIONARY KEYS")
-    print("=" * 60)
+    print(f"\nCalibration dictionary keys:")
     for cal_key in result.calibration_dict.keys():
         print(f"  {cal_key}")
 
-
-# =============================================================================
-# MANUAL PIPELINE: Deterministic Mapping (no matching algorithm)
-# =============================================================================
 
 def build_mapping_from_raw_configs(
     file_configs: List[Dict[str, Any]],
@@ -894,10 +837,6 @@ def build_mapping_from_raw_configs(
     return mapping
 
 
-# =============================================================================
-# REQUIRED CALIBRATION PARAMETER DEFINITIONS
-# =============================================================================
-
 REQUIRED_CALIBRATION_PARAMS = [
     "calibration_date",
     "gain_correction",
@@ -915,10 +854,6 @@ REQUIRED_CALIBRATION_PARAMS = [
 ENVIRONMENTAL_DIRECT = ["absorption_indicative", "sound_speed_indicative"]
 ENVIRONMENTAL_DERIVED = ["temperature", "salinity", "pressure"]
 
-
-# =============================================================================
-# HIGH-LEVEL PIPELINE FUNCTIONS
-# =============================================================================
 
 def _is_missing(value: Any) -> bool:
     """Return True if a parameter value is effectively missing (None or all-None list)."""
@@ -1051,10 +986,7 @@ def resolve_conflicts_interactive(
         key = tuple(sorted(mm.matching_cal_keys))
         groups[key].append(mm)
 
-    print("\n" + "=" * 80)
-    print("CONFLICT: MULTIPLE CALIBRATION MATCHES DETECTED")
-    print("=" * 80)
-    print(f"\n{len(groups)} unique raw configuration(s) matched multiple "
+    print(f"\nConflict: {len(groups)} unique raw configuration(s) matched multiple "
           f"calibration files.")
     print("You will be prompted to choose which file to keep for each conflict.\n")
 
@@ -1120,9 +1052,7 @@ def resolve_conflicts_interactive(
 
     result.multiple_matches.clear()
 
-    print("\n" + "=" * 80)
-    print("ALL CONFLICTS RESOLVED")
-    print("=" * 80)
+    print("\nAll conflicts resolved.")
 
 
 def check_for_conflicts(result: MappingResult, cal_files_dir: str | Path = None) -> None:
@@ -1148,10 +1078,7 @@ def check_for_conflicts(result: MappingResult, cal_files_dir: str | Path = None)
         key = tuple(sorted(mm.matching_cal_keys))
         groups[key].append(mm)
 
-    print("\n" + "=" * 80)
-    print("CONFLICT: MULTIPLE CALIBRATION MATCHES DETECTED")
-    print("=" * 80)
-    print(f"\n{len(groups)} unique raw configuration(s) matched multiple "
+    print(f"\nConflict: {len(groups)} unique raw configuration(s) matched multiple "
           f"calibration files.")
     print("Each raw configuration must match exactly ONE calibration file.")
     if cal_files_dir:
@@ -1209,9 +1136,7 @@ def check_required_calibration_params(
     if environmental_derived is None:
         environmental_derived = ENVIRONMENTAL_DERIVED
 
-    print("=" * 80)
-    print("MISSING REQUIRED CALIBRATION PARAMETER CHECK")
-    print("=" * 80)
+    print("Checking required calibration parameters...")
 
     missing_by_key: Dict[str, List[str]] = {}
 
@@ -1234,10 +1159,10 @@ def check_required_calibration_params(
             missing_by_key[cal_key] = missing
             print(f"\n  Calibration key: {cal_key}")
             for param in missing:
-                print(f"     - MISSING REQUIRED: {param}")
+                print(f"     - missing: {param}")
 
     if not missing_by_key:
-        print("\n All required calibration parameters are present for every mapped channel.")
+        print("  All required calibration parameters are present.")
 
     return missing_by_key
 
@@ -1263,17 +1188,15 @@ def verify_calibration_file_usage(
     )
     unused_files = [f for f in all_cal_files if f.stem not in used_stems]
 
-    print("=" * 80)
-    print("CALIBRATION FILE USAGE CHECK")
-    print("=" * 80)
+    print("Checking calibration file usage...")
 
     if unused_files:
-        print(f"\n  {len(unused_files)} single-channel calibration file(s) are NOT used in the mapping:")
+        print(f"  {len(unused_files)} calibration file(s) not used in the mapping:")
         for f in unused_files:
-            print(f"     - {f.name}")
-        print(f"\n   Re-run the mapping step to resolve these.")
+            print(f"    - {f.name}")
+        print(f"  Re-run the mapping step to resolve these.")
     else:
-        print("\n All single-channel calibration files are used in the mapping.")
+        print("  All calibration files are used in the mapping.")
 
     return unused_files
 

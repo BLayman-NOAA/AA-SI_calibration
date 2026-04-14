@@ -383,7 +383,7 @@ def get_positions_from_flagged_list(size, lon, lat, flagged_list):
 
 def rdp_line_simplify(good_positions, epsilon=0.004):  #default was 0.5
     """
-    Simplify the lon/lat list using Ramer–Douglas–Peucker algorithm
+    Simplify the lon/lat list using Ramer-Douglas-Peucker algorithm
     Args:
         epsilon (int): Control of tolerance in RDP function.
 

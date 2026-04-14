@@ -778,15 +778,15 @@ def generate_standardized_cal_mapping(
     if existing_cal_files:
         if verbose:
             print(f"Found {len(existing_cal_files)} existing single-channel calibration "
-                  f"file(s) in {single_cal_output} — skipping Steps 1-2.")
+                  f"file(s) in {single_cal_output}, skipping Steps 1-2.")
     else:
-        # ── STEP 1: Read raw file configurations ─────────────────────────
+        # Step 1: Read raw file configurations
         file_configs, frequencies_set = process_raw_folder(raw_input_folder, verbose=verbose)
         save_yaml(file_configs, raw_configs_path)
         if verbose:
             print(f"\nSaved raw file configurations to: {raw_configs_path}")
 
-        # ── STEP 2: Parse manufacturer calibration files ─────────────────
+        # Step 2: Parse manufacturer calibration files
         cal_params, env_params, other_params, cal_file_type = \
             manufacturer_file_parsers.extract_and_convert_calibration_params(
                 cal_input_folder,
@@ -795,9 +795,7 @@ def generate_standardized_cal_mapping(
             )
 
         if verbose:
-            print("\n" + "=" * 80)
-            print(f"Parsed {cal_file_type} calibration parameters summary:")
-            print("=" * 80)
+            print(f"\nParsed {cal_file_type} calibration parameters:")
             print(f"Channels: {other_params.get('channel')}")
             print(f"Frequencies: {other_params.get('frequency_nominal')}")
             print(f"Gain corrections: {cal_params.get('gain_correction')}")
@@ -816,14 +814,12 @@ def generate_standardized_cal_mapping(
 
         if verbose:
             print(f"\nSaved {saved_count} single-channel calibration file(s) to: {single_cal_output}")
-            print("\n" + "=" * 80)
-            print("Single-channel calibration files:")
-            print("=" * 80)
+            print("\nSingle-channel calibration files:")
             for f in sorted(single_cal_output.glob("*.yaml")):
                 size_kb = f.stat().st_size / 1024
                 print(f"  {f.name} ({size_kb:.1f} KB)")
 
-    # ── STEP 3: Load configs, build mapping, save ────────────────────────
+    # Step 3: Load configs, build mapping, save
     raw_file_configs = load_raw_configs(raw_configs_path)
 
     if verbose:
@@ -882,7 +878,7 @@ def generate_standardized_cal_mapping(
         )
         print_short_key_summary(short_map, result.calibration_dict)
 
-    # ── Verification ─────────────────────────────────────────────────────
+    # Verification
     missing_params = check_required_calibration_params(calibration_dict)
     unused_files = verify_calibration_file_usage(calibration_dict, single_cal_output)
 

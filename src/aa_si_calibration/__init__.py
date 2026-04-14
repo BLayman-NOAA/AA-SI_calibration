@@ -1,15 +1,4 @@
-"""
-Calibration Library Package
-
-This package provides tools for managing calibration data for acoustic instruments.
-
-Modules:
-    - mapping_algorithm: Match raw file configurations to calibration data
-    - calibration: Additional calibration utilities
-    - raw_reader_api: Raw file reading interface
-    - standardized_file_lib: Standardized calibration file I/O and schema validation
-    - manufacturer_file_parsers: Parse EK60/EK80 manufacturer calibration files
-"""
+"""Calibration library for managing acoustic instrument calibration data."""
 from importlib.metadata import PackageNotFoundError, version
 
 try:

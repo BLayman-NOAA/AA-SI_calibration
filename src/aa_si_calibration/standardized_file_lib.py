@@ -60,16 +60,13 @@ def ensure_string_identifiers(data):
         return data
 
 
-# ==== STANDARDIZED CALIBRATION FILE CODE ====
-
-
 def extract_degree_constraints(schema):
     """Extract min/max constraints for degree-based parameters from the schema.
     
     Returns a dict mapping field names to their (minimum, maximum) constraints
     for fields that have x-units: "arc_degree".
     """
-    channel_props = schema.get("$defs", {}).get("channelBlock", {}).get("properties", {})
+    channel_props = schema.get("properties", {})
     degree_constraints = {}
     
     for field_name, metadata in channel_props.items():
@@ -88,14 +85,14 @@ def extract_degree_constraints(schema):
     return degree_constraints
 
 
-def sanitize_degree_values(calibration_dict, schema):
+def sanitize_degree_values(channel_dict, schema):
     """Replace out-of-range degree values with null and notify user.
     
     For any parameter that should be in degrees (according to the schema),
     values outside the valid range are replaced with null due to instrument error.
     
     Args:
-        calibration_dict: The calibration dictionary to sanitize (modified in place)
+        channel_dict: A single channel dictionary to sanitize (modified in place)
         schema: The JSON schema for validation
         
     Returns:
@@ -104,43 +101,40 @@ def sanitize_degree_values(calibration_dict, schema):
     degree_constraints = extract_degree_constraints(schema)
     warnings = []
     
-    channels = calibration_dict.get("channels", []) or []
+    channel_id = channel_dict.get("channel", "Unknown channel")
     
-    for channel_index, channel_entry in enumerate(channels):
-        channel_id = channel_entry.get("channel", f"Channel {channel_index + 1}")
+    for field_name, (minimum, maximum) in degree_constraints.items():
+        value = channel_dict.get(field_name)
         
-        for field_name, (minimum, maximum) in degree_constraints.items():
-            value = channel_entry.get(field_name)
-            
-            if value is None:
-                continue
-            
-            # Handle array fields
-            if isinstance(value, (list, tuple)):
-                sanitized_array = []
-                for i, v in enumerate(value):
-                    if v is None:
-                        sanitized_array.append(None)
-                    elif not isinstance(v, (int, float)):
-                        sanitized_array.append(v)
-                    elif (minimum is not None and v < minimum) or (maximum is not None and v > maximum):
-                        warnings.append(
-                            f"⚠️  {field_name}[{i}] = {v} is out of range [{minimum}, {maximum}] "
-                            f"for channel '{channel_id}'. Replaced with null due to instrument error."
-                        )
-                        sanitized_array.append(None)
-                    else:
-                        sanitized_array.append(v)
-                channel_entry[field_name] = sanitized_array
-            
-            # Handle scalar fields
-            elif isinstance(value, (int, float)):
-                if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+        if value is None:
+            continue
+        
+        # Handle array fields
+        if isinstance(value, (list, tuple)):
+            sanitized_array = []
+            for i, v in enumerate(value):
+                if v is None:
+                    sanitized_array.append(None)
+                elif not isinstance(v, (int, float)):
+                    sanitized_array.append(v)
+                elif (minimum is not None and v < minimum) or (maximum is not None and v > maximum):
                     warnings.append(
-                        f"⚠️  {field_name} = {value} is out of range [{minimum}, {maximum}] "
+                        f" {field_name}[{i}] = {v} is out of range [{minimum}, {maximum}] "
                         f"for channel '{channel_id}'. Replaced with null due to instrument error."
                     )
-                    channel_entry[field_name] = None
+                    sanitized_array.append(None)
+                else:
+                    sanitized_array.append(v)
+            channel_dict[field_name] = sanitized_array
+        
+        # Handle scalar fields
+        elif isinstance(value, (int, float)):
+            if (minimum is not None and value < minimum) or (maximum is not None and value > maximum):
+                warnings.append(
+                    f" {field_name} = {value} is out of range [{minimum}, {maximum}] "
+                    f"for channel '{channel_id}'. Replaced with null due to instrument error."
+                )
+                channel_dict[field_name] = None
     
     return warnings
 
@@ -156,7 +150,7 @@ def load_standardized_calibration_schema(schema_path=None):
 
 def extract_channel_precision_map(schema):
     """Return a mapping of field name to x-precision from the schema."""
-    channel_props = schema.get("$defs", {}).get("channelBlock", {}).get("properties", {})
+    channel_props = schema.get("properties", {})
     precision_map = {}
     for field_name, metadata in channel_props.items():
         precision = metadata.get("x-precision")
@@ -217,16 +211,15 @@ def _value_exceeds_precision(value, precision):
     return decimal_value != quantized
 
 
-def enforce_precision_limits(calibration_dict, precision_map):
-    """Raise ValueError if any channel field exceeds the allowed precision."""
-    channels = calibration_dict.get("channels", []) or []
-    for channel_index, channel_entry in enumerate(channels):
-        for field_name, precision in precision_map.items():
-            value = channel_entry.get(field_name)
-            if _value_exceeds_precision(value, precision):
-                raise ValueError(
-                    f"Channel index {channel_index} field '{field_name}' exceeds allowed precision of {precision} decimal places"
-                )
+def enforce_precision_limits(channel_dict, precision_map):
+    """Raise ValueError if any field exceeds the allowed precision."""
+    for field_name, precision in precision_map.items():
+        value = channel_dict.get(field_name)
+        if _value_exceeds_precision(value, precision):
+            channel_id = channel_dict.get("channel", "Unknown")
+            raise ValueError(
+                f"Channel '{channel_id}' field '{field_name}' exceeds allowed precision of {precision} decimal places"
+            )
 
 
 def extract_serial_number_from_channel_name(channel_name):
@@ -314,9 +307,9 @@ def convert_params_to_standardized_names(channels, cal_params, env_params, other
     Args:
         channels: List of channel name strings (one per channel).
         cal_params: Dict of calibration parameters (gain, sa correction, beam
-            angles, etc.) — values are per-channel lists.
+            angles, etc.). Values are per-channel lists.
         env_params: Dict of environmental parameters (sound speed, absorption,
-            temperature, salinity, etc.) — may be scalar or per-channel.
+            temperature, salinity, etc.). May be scalar or per-channel.
         other_params: Dict of additional parameters (frequency, pulse form,
             serial numbers, source file info, etc.).
 
@@ -600,7 +593,7 @@ def convert_numpy_scalars(obj):
 
 
 def validate_standardized_calibration_dict(calibration_dict, schema_path):
-    """Validate the standardized calibration dictionary against the JSON Schema file."""
+    """Validate a single-channel calibration dictionary against the JSON Schema file."""
     schema_file = Path(schema_path)
     if not schema_file.exists():
         raise FileNotFoundError(f"Schema file not found: {schema_file}")
@@ -616,22 +609,12 @@ def assign_parameters_to_standardized_dictionary(
     channel_params,
     global_params
     ):
-    """Assemble validated standardized calibration dictionary from channel and global params."""
-    standardized_dictionary = get_empty_top_level_params()
+    """Assemble validated standardized calibration channel dicts from channel and global params.
     
+    Returns a list of channel dictionaries, sorted by frequency.
+    """
     # Generate a shared timestamp for all channels in this batch
     record_created_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    
-    reserved_top_level_keys = {"channels"}
-    # Keys that belong at the channel level, not the top level
-    channel_level_keys = {"record_author"}
-
-    for global_param, value in global_params.items():
-        if global_param in reserved_top_level_keys or global_param in channel_level_keys:
-            print(f"global_param {global_param} ignored because it is reserved")
-            continue
-        print("global_param", global_param)
-        standardized_dictionary[global_param] = value
 
     schema = load_standardized_calibration_schema()
     precision_map = extract_channel_precision_map(schema)
@@ -648,6 +631,7 @@ def assign_parameters_to_standardized_dictionary(
 
     sorted_channels = sorted(channel_params, key=_sort_key)
 
+    channel_dicts = []
     for channel_param in sorted_channels:
         channel_entry = get_empty_channel_params()
         for param_name, value in channel_param.items():
@@ -659,21 +643,21 @@ def assign_parameters_to_standardized_dictionary(
         if channel_entry.get("record_author") is None and global_params.get("record_author") is not None:
             channel_entry["record_author"] = global_params["record_author"]
         channel_entry = apply_precision_to_channel(channel_entry, precision_map)
-        standardized_dictionary["channels"].append(channel_entry)
+        channel_entry = convert_numpy_scalars(channel_entry)
 
-    standardized_dictionary = convert_numpy_scalars(standardized_dictionary)
+        # Sanitize out-of-range degree values before validation
+        degree_warnings = sanitize_degree_values(channel_entry, schema)
+        if degree_warnings:
+            print("\n" + "=" * 80)
+            print("DEGREE VALUE SANITIZATION WARNINGS")
+            print("=" * 80)
+            for warning in degree_warnings:
+                print(warning)
+            print("=" * 80 + "\n")
 
-    # Sanitize out-of-range degree values before validation
-    degree_warnings = sanitize_degree_values(standardized_dictionary, schema)
-    if degree_warnings:
-        print("\n" + "=" * 80)
-        print("DEGREE VALUE SANITIZATION WARNINGS")
-        print("=" * 80)
-        for warning in degree_warnings:
-            print(warning)
-        print("=" * 80 + "\n")
+        channel_dicts.append(channel_entry)
 
-    return standardized_dictionary
+    return channel_dicts
 
 
 def get_empty_top_level_params():
@@ -785,7 +769,7 @@ def save_cal_params_to_standardized_file(
     .. deprecated::
         This function saves all channels into one multi-channel file.  The
         preferred approach is :func:`save_single_channel_files_from_params`,
-        which writes each channel as an individual file — the canonical
+        which writes each channel as an individual file, the canonical
         intermediate format used by both the full pipeline and the
         user-provided calibration pipeline.  This function is retained for
         backward compatibility but is no longer actively developed.
@@ -806,14 +790,21 @@ def save_cal_params_to_standardized_file(
 
     converted_channel_params = convert_params_to_standardized_names(other_params["channel"], cal_params, env_params, other_params)
 
-    standardized_dictionary = assign_parameters_to_standardized_dictionary(converted_channel_params, other_global_params)
-    
-    # Ensure identifier fields are stored as strings
-    standardized_dictionary = ensure_string_identifiers(standardized_dictionary)
+    channel_dicts = assign_parameters_to_standardized_dictionary(converted_channel_params, other_global_params)
+    channel_dicts = [ensure_string_identifiers(ch) for ch in channel_dicts]
 
     schema_path = SCHEMA_PATH
     
-    validate_standardized_calibration_dict(standardized_dictionary, schema_path)
+    # Validate each channel individually against the single-channel schema
+    for channel_dict in channel_dicts:
+        validate_standardized_calibration_dict(channel_dict, schema_path)
+
+    # Build legacy multi-channel structure for file output
+    standardized_dictionary = get_empty_top_level_params()
+    for global_param, value in other_global_params.items():
+        if global_param in standardized_dictionary and global_param != "channels":
+            standardized_dictionary[global_param] = value
+    standardized_dictionary["channels"] = channel_dicts
 
     try:
         with open(standardized_cal_file_path, 'w') as file:
@@ -825,10 +816,6 @@ def save_cal_params_to_standardized_file(
     except Exception as e:
         print(f"An error occurred while writing the file: {e}")
 
-
-# =============================================================================
-# CALIBRATION KEY & FILENAME FUNCTIONS
-# =============================================================================
 
 # Schema-derived precisions for the numeric fields used in the calibration key.
 # Loaded once; kept at module level for efficiency.
@@ -1118,18 +1105,14 @@ def get_calibration_from_file(
         return yaml.safe_load(f)
 
 
-# =============================================================================
-# SINGLE-CHANNEL FILE FUNCTIONS
-# =============================================================================
-
 def save_single_channel_files(
-    calibration_dict,
+    channel_dicts,
     output_dir,
     key_func=None,
     short_filenames=False,
 ):
     """
-    Save each channel from a standardized calibration dictionary as an
+    Save each channel from a list of channel dictionaries as an
     individual single-channel YAML file.
 
     Each channel is saved as a flat YAML dictionary.  The filename is derived
@@ -1138,8 +1121,7 @@ def save_single_channel_files(
     via :func:`build_short_filename_map` (short filenames).
 
     Args:
-        calibration_dict: Standardized calibration dictionary with a
-            ``'channels'`` key containing a list of channel dictionaries.
+        channel_dicts: List of channel dictionaries to save.
         output_dir: Directory to save individual channel files.
         key_func: Optional ``callable(channel_dict) -> str`` that returns the
             calibration key.  If *None*, uses :func:`build_calibration_key`.
@@ -1156,7 +1138,7 @@ def save_single_channel_files(
     if key_func is None:
         key_func = build_calibration_key
 
-    channels = calibration_dict.get("channels", []) or []
+    channels = channel_dicts if isinstance(channel_dicts, list) else []
 
     # Group channels by their base calibration key to detect duplicates
     base_key_groups: dict = {}  # base_key -> [channel_data, ...]
@@ -1228,7 +1210,7 @@ def save_individual_calibration_files(
 
     Unlike :func:`save_single_channel_files` (which takes a list of channels
     and builds keys), this function accepts a dictionary that is **already
-    keyed** by calibration key — for example ``MappingResult.calibration_dict``.
+    keyed** by calibration key, for example ``MappingResult.calibration_dict``.
 
     Args:
         calibration_dict_keyed: ``{cal_key: channel_data_dict, ...}``
@@ -1309,25 +1291,22 @@ def save_single_channel_files_from_params(
     converted_channel_params = convert_params_to_standardized_names(
         other_params["channel"], cal_params, env_params, other_params
     )
-    standardized_dictionary = assign_parameters_to_standardized_dictionary(
+    channel_dicts = assign_parameters_to_standardized_dictionary(
         converted_channel_params, other_global_params
     )
-    standardized_dictionary = ensure_string_identifiers(standardized_dictionary)
+    channel_dicts = [ensure_string_identifiers(ch) for ch in channel_dicts]
     
-    # Validate against schema
-    validate_standardized_calibration_dict(standardized_dictionary, SCHEMA_PATH)
+    # Validate each channel against schema
+    for channel_dict in channel_dicts:
+        validate_standardized_calibration_dict(channel_dict, SCHEMA_PATH)
     
     # Save each channel as an individual file
     saved_count, output_dir = save_single_channel_files(
-        standardized_dictionary, output_dir, short_filenames=short_filenames
+        channel_dicts, output_dir, short_filenames=short_filenames
     )
     
-    return saved_count, output_dir, standardized_dictionary
+    return saved_count, output_dir, channel_dicts
 
-
-# =============================================================================
-# MANUAL PIPELINE: Calibration Template Generation, Saving, and Validation
-# =============================================================================
 
 def create_calibration_template(channel: dict, calibration_date: str) -> dict:
     """
@@ -1343,7 +1322,7 @@ def create_calibration_template(channel: dict, calibration_date: str) -> dict:
 
     Returns:
         Template dictionary ready for serialization. ``record_created`` is left
-        as ``None`` — the caller should set it at the batch level.
+        as ``None``. The caller should set it at the batch level.
     """
     # Round transmit_duration to standard precision
     transmit_duration = round(channel.get('transmit_duration_nominal', 0), 6)
@@ -1464,37 +1443,32 @@ def generate_template_yaml_string(template: dict, calibration_date: str = None) 
     t = template
     cal_date = calibration_date or t.get('calibration_date', '')
 
-    yaml_str = f"""# =============================================================================
-# CALIBRATION TEMPLATE - FILL IN VALUES BELOW
-# =============================================================================
-# This file was auto-generated from raw file channel configurations.
+    yaml_str = f"""# Calibration template
+# Auto-generated from raw file channel configurations.
 #
-# Please note: most of these parameters use the SONAR-netCDF4 v2.1 naming conventions and definitions:
+# Most parameters use SONAR-netCDF4 v2.1 naming conventions:
 # https://htmlpreview.github.io/?https://github.com/ices-publications/SONAR-netCDF4/blob/master/Formatted_docs/crr341.html
 #
-# For a guide to YAML formatting and supported syntax, please see:
+# YAML formatting guide:
 # https://docs.ansible.com/projects/ansible/latest/reference_appendices/YAMLSyntax.html
-# 
-# INSTRUCTIONS:
-# 1. Ensure that calibration date from configuration is correct: {cal_date}. If not, modify the calibration_date field.
+#
+# Instructions:
+# 1. Verify calibration date is correct: {cal_date}
 # 2. Fill in core calibration values: gain_correction, sa_correction, equivalent_beam_angle
 # 3. Fill in environmental parameters OR temperature/salinity/pressure to calculate them
 # 4. Fill in beam parameters and optional fields
 #
-# IMPORTANT: Do not modify the channel identification parameters at the top
-# (transceiver_id, transducer_model, pulse_form, frequency_*, transmit_power, 
+# Do not modify the channel identification parameters at the top
+# (transceiver_id, transducer_model, pulse_form, frequency_*, transmit_power,
 # transmit_duration_nominal) as these are used for matching to raw files.
 #
-# PARAMETER REQUIREMENTS:
-# - [MAPPING] = Required for matching calibration to raw files (do not modify if provided)
-# - [REQUIRED] = Required for calibration
-# - [OPTIONAL] = Optional
+# Parameter requirements:
+#   [MAPPING]  = Required for matching calibration to raw files (do not modify)
+#   [REQUIRED] = Required for calibration
+#   [OPTIONAL] = Optional
 #
-# NAMING THIS FILE:
-# Make sure that each calibration file has a unique name.
-# It's recommended that you use the following format: YYYY-MM-DD_<frequency in Hz>_<unique configuration id per frequency>
-#
-# =============================================================================
+# File naming: use a unique name, recommended format:
+# YYYY-MM-DD_<frequency in Hz>_<unique configuration id per frequency>
 
 record_created: {fmt(t['record_created'])} # automatically populated when record is created
 record_author: {fmt(t['record_author'])} # Name of person or organization who authored this file
@@ -1507,7 +1481,7 @@ transceiver_number: {fmt(t['transceiver_number'])}
 transceiver_port: {fmt(t['transceiver_port'])}
 channel_instance_number: {fmt(t['channel_instance_number'])}
 transducer_model: {fmt(t['transducer_model'])}  # [MAPPING] Transducer model for matching
-transducer_serial_number: {fmt(t['transducer_serial_number'])} # [MAPPING] Note: ideally this field is provided for mapping, but will be ignored if missing.
+transducer_serial_number: {fmt(t['transducer_serial_number'])} # [MAPPING] Ideally provided for mapping, ignored if missing.
 pulse_form: {fmt(t['pulse_form'])}  # [MAPPING] Pulse form (0=CW, 1=FM) for matching
 frequency_start: {fmt(t['frequency_start'])}  # [MAPPING] Start frequency for matching
 frequency_end: {fmt(t['frequency_end'])}  # [MAPPING] End frequency for matching
@@ -1517,51 +1491,39 @@ transmit_power: {fmt(t['transmit_power'])}  # [MAPPING] Transmit power for match
 transmit_duration_nominal: {fmt(t['transmit_duration_nominal'])}  # [MAPPING] Pulse duration for matching
 multiplexing_found: {fmt(t['multiplexing_found'])}
 
-# -----------------------------------------------------------------------------
-# CALIBRATION METADATA
-# -----------------------------------------------------------------------------
-calibration_date: {fmt(t['calibration_date'])}  # [REQUIRED] Date of calibration in YYYY-MM-DD (can be generated from user config)
+# Calibration metadata
+calibration_date: {fmt(t['calibration_date'])}  # [REQUIRED] Date of calibration (YYYY-MM-DD)
 calibration_comments: {fmt(t['calibration_comments'])}  # [OPTIONAL] Notes about calibration
 calibration_version: {fmt(t['calibration_version'])}  # [OPTIONAL] Calibration version identifier
 
-# -----------------------------------------------------------------------------
-# CORE CALIBRATION PARAMETERS
-# -----------------------------------------------------------------------------
+# Core calibration parameters
 gain_correction: {fmt_list(t['gain_correction'])}  # [REQUIRED] Transducer gain correction (dB)
-sa_correction: {fmt_list(t['sa_correction'])}  # [REQUIRED] Sa correction factor (dB) - Note: only used in Sv calculation
-equivalent_beam_angle: {fmt(t['equivalent_beam_angle'])}  # [REQUIRED] (dB re sr). Note: only used in Sv calculation
+sa_correction: {fmt_list(t['sa_correction'])}  # [REQUIRED] Sa correction factor (dB). Only used in Sv calculation
+equivalent_beam_angle: {fmt(t['equivalent_beam_angle'])}  # [REQUIRED] (dB re sr). Only used in Sv calculation
 
-# -----------------------------------------------------------------------------
-# ENVIRONMENTAL PARAMETERS
+# Environmental parameters
 # Option A: Provide sound_speed and absorption directly
-# Option B: Provide temperature, salinity, pressure, acidity 
-# -----------------------------------------------------------------------------
+# Option B: Provide temperature, salinity, pressure, acidity
 absorption_indicative: {fmt(t['absorption_indicative'])}  # [REQUIRED*] Sound absorption coefficient (dB/m) - *or provide T/S/P/acidity
 sound_speed_indicative: {fmt(t['sound_speed_indicative'])}  # [REQUIRED*] Sound speed (m/s) - *or provide T/S/P/acidity
 
-# -----------------------------------------------------------------------------
-# PHYSICAL ENVIRONMENT - These can be used to calculate sound_speed/absorption
-# -----------------------------------------------------------------------------
+# Physical environment (can be used to calculate sound_speed/absorption)
 temperature: {fmt(t['temperature'])}  # [OPTIONAL] Water temperature (deg C) - used to calculate sound_speed & absorption
 salinity: {fmt(t['salinity'])}  # [OPTIONAL] Water salinity (PSU) - used to calculate sound_speed & absorption
 acidity: {fmt(t['acidity'])}  # [OPTIONAL] Water pH (acidity) - used to calculate absorption (default 8.1 if not provided)
 pressure: {fmt(t['pressure'])}  # [OPTIONAL] Water pressure (dbar) - used to calculate sound_speed & absorption
 
-# -----------------------------------------------------------------------------
-# BEAM PARAMETERS - Note: Not currently supported as user parameters in Echopype (extracted from raw)
-# -----------------------------------------------------------------------------
+# Beam parameters (not currently supported as user parameters in Echopype)
 beamwidth_transmit_major: {fmt_list(t['beamwidth_transmit_major'])}  # [REQUIRED] Transmit beamwidth major axis (degrees)
 beamwidth_receive_major: {fmt_list(t['beamwidth_receive_major'])}  # [REQUIRED] Receive beamwidth major axis (degrees)
 beamwidth_transmit_minor: {fmt_list(t['beamwidth_transmit_minor'])}  # [REQUIRED] Transmit beamwidth minor axis (degrees)
 beamwidth_receive_minor: {fmt_list(t['beamwidth_receive_minor'])}  # [REQUIRED] Receive beamwidth minor axis (degrees)
 echoangle_major: {fmt_list(t['echoangle_major'])}  # [REQUIRED] Echo angle offset major axis (degrees)
 echoangle_minor: {fmt_list(t['echoangle_minor'])}  # [REQUIRED] Echo angle offset minor axis (degrees)
-echoangle_major_sensitivity: {fmt_list(t['echoangle_major_sensitivity'])}  # [OPTIONAL] Angle sensitivity major axis (electrical deg per mechanical deg).  Note: only used in TS calculation.
-echoangle_minor_sensitivity: {fmt_list(t['echoangle_minor_sensitivity'])}  # [OPTIONAL] Angle sensitivity minor axis (electrical deg per mechanical deg). Note: only used in TS calculation.
+echoangle_major_sensitivity: {fmt_list(t['echoangle_major_sensitivity'])}  # [OPTIONAL] Angle sensitivity major axis
+echoangle_minor_sensitivity: {fmt_list(t['echoangle_minor_sensitivity'])}  # [OPTIONAL] Angle sensitivity minor axis
 
-# -----------------------------------------------------------------------------
-# OPTIONAL RAW CONFIGURATION PARAMETERS
-# -----------------------------------------------------------------------------
+# Optional raw configuration parameters
 # sample_interval: Stored per-ping in raw file. Used by echopype to calculate range
 # (range = range_sample * sample_interval * sound_speed / 2). Not needed for mapping.
 sample_interval: {fmt(t['sample_interval'])}
@@ -1570,9 +1532,7 @@ sample_interval: {fmt(t['sample_interval'])}
 # and frequency. For FM: approximately (frequency_end - frequency_start).
 transmit_bandwidth: {fmt(t['transmit_bandwidth'])}
 
-# -----------------------------------------------------------------------------
-# CALIBRATION PROVENANCE - Optional metadata
-# -----------------------------------------------------------------------------
+# Calibration provenance
 calibration_acquisition_method: {fmt(t['calibration_acquisition_method'])}  # [OPTIONAL] Method (e.g., sphere, in-situ)
 sphere_diameter: {fmt(t['sphere_diameter'])}  # [OPTIONAL] Calibration sphere diameter (mm)
 sphere_material: {fmt(t['sphere_material'])}  # [OPTIONAL] Sphere material (e.g., tungsten carbide, copper)
@@ -1694,23 +1654,18 @@ def save_multi_channel_config_with_comments(templates: dict, file_path):
         file_path: Destination file path (str or Path).
     """
     file_path = Path(file_path)
-    header = """# =============================================================================
-# CALIBRATION CONFIGURATIONS - FILL IN VALUES BELOW
-# =============================================================================
-# This file contains ALL calibration templates in a single file.
-# You can edit EITHER this file OR the individual files in:
+    header = """# Calibration configurations
+# This file contains all calibration templates in a single file.
+# You can edit either this file or the individual files in:
 #   Single_Channel_Calibration_Templates/
 #
 # After filling in values, run Step 6 to generate final mapping files.
 #
-# PARAMETER KEY:
-# - [MAPPING] = Do not modify (used for matching)
-# - [REQUIRED] = Required for Sv/TS calibration
-# - [REQUIRED-Sv] = Required for Sv only
-# - [REQUIRED*] = Required OR provide T/S/P/acidity instead
-# - [ECHOPYPE-ENV] = Used to calculate sound_speed/absorption
-# - [OPTIONAL] = Optional metadata
-# =============================================================================
+# Parameter key:
+#   [MAPPING]    = Do not modify (used for matching)
+#   [REQUIRED]   = Required for Sv/TS calibration
+#   [REQUIRED*]  = Required OR provide T/S/P/acidity instead
+#   [OPTIONAL]   = Optional metadata
 
 """
     with open(file_path, 'w') as f:
