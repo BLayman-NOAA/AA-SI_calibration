@@ -31,6 +31,18 @@ Key capabilities:
 - **Channel-to-calibration mapping** — Automatically match raw file channels to the correct calibration parameters
 - **Manual calibration workflow** — Generate template files for user-provided calibration values
 
+### Notebooks
+
+The `notebooks/` folder contains Jupyter notebooks demonstrating the three supported calibration workflows, along with example EK60/EK80 data:
+
+- **`full_pipeline.ipynb`** — Complete automated workflow that reads raw file configurations, parses manufacturer calibration files (`.cal`/`.xml`) into standardized single-channel format, matches raw file channels to calibration data, and generates mapping files.
+- **`manual_pipeline.ipynb`** — Manual workflow for users without manufacturer calibration files. Reads raw configurations, generates calibration templates with null values for users to fill in, and creates mapping files. Includes validation steps to verify user-provided calibration values.
+- **`user_provided_cal_pipeline.ipynb`** — Streamlined workflow for users who already have single-channel calibration files in the standardized YAML format. Loads user-provided calibration files and raw configurations, runs the mapping algorithm, and produces mapping outputs without requiring manufacturer file parsing.
+
+### Roadmap
+
+The `Roadmap/` folder documents the long-term plan for applying validated calibration values to acoustic data files. It covers calibration provenance goals, Kongsberg EK500/EK60/EK80 channel identification conventions, standardized calibration file naming conventions, and the implementation strategy for mapping calibration values to data files across collections.
+
 ### Standardized Calibration File Format
 
 The `standardized_file/` folder contains examples of our proposed standardized calibration file format and its JSON schema. Please note that this format is a work in progress and not a finalized convention or standard.
