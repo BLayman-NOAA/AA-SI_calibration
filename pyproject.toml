@@ -98,6 +98,9 @@ addopts = [
     "--tb=short",
     "--strict-markers",
 ]
+markers = [
+    "slow: marks tests as slow (e2e pipeline tests); deselect with -m 'not slow'",
+]
 
 [tool.coverage.run]
 source = ["src/aa_si_calibration"]

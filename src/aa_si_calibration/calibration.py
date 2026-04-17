@@ -1,8 +1,7 @@
 """Calibration extraction and pipeline orchestration.
 
-Provides functions for extracting calibration parameters from echopype
-EchoData objects, converting between standardized and comparison formats,
-and running the full calibration standardization pipeline.
+Provides functions for extracting calibration parameters from echopype EchoData objects, 
+and converting between standardized and comparison formats
 """
 
 import echopype as ep
@@ -13,6 +12,8 @@ import matplotlib.pyplot as plt
 import json
 import os
 import re
+
+from aa_si_calibration.utils import CalibrationFlags
 
 from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
 from aa_si_calibration import manufacturer_file_parsers
@@ -90,6 +91,16 @@ def check_parameter_changes(parameter_data, parameter_name, channels, changes, f
                           f"{change_info['value_before']} -> {change_info['value_after']}")
 
 
+def _safe_extract(echodata, group, field, flags, call_values=True):
+    """Extract a parameter from echodata, returning None and logging on failure."""
+    try:
+        data = echodata[group][field]
+        return data.values if call_values else data
+    except (KeyError, AttributeError):
+        flags["missing_parameters"].append(f"{group}/{field}")
+        return None
+
+
 def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
     """Extract calibration and environmental parameters from echopype netCDF data.
     
@@ -108,56 +119,15 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
             - other_params: Other parameters (channels, transmit_duration, frequency_nominal)
             - channels: Array of channel names
     """
-    # Ensure output folder exists
-    os.makedirs(output_logs_folder, exist_ok=True)
-    
-    # Load or create calibration flags JSON
-    flags_file = Path(output_logs_folder) / "calibration_flags.json"
-    if flags_file.exists():
-        with open(flags_file, 'r') as f:
-            flags = json.load(f)
-    else:
-        flags = {
-            "moderate_impacts": [],
-            "large_impacts": [],
-            "critical_impacts": [],
-            "data_irregularities": {
-                "across_frequencies": [],
-                "across_pings": []
-            },
-            "missing_parameters": []
-        }
-    
-    # Ensure all required keys exist
-    for key in ["moderate_impacts", "large_impacts", "critical_impacts", "data_irregularities", "missing_parameters"]:
-        if key not in flags:
-            flags[key] = []
-        if key == "data_irregularities":
-            if "across_frequencies" not in flags[key]:
-                flags[key]["across_frequencies"] = []
-            if "across_pings" not in flags[key]:
-                flags[key]["across_pings"] = []
+    flags = CalibrationFlags(output_logs_folder)
+    if "data_irregularities" not in flags or not isinstance(flags["data_irregularities"], dict):
+        flags["data_irregularities"] = {"across_frequencies": [], "across_pings": []}
+    flags["data_irregularities"].setdefault("across_frequencies", [])
+    flags["data_irregularities"].setdefault("across_pings", [])
 
-    # Sound Speed
-    try:
-        sound_speed_num = echodata["Environment"].sound_speed_indicative.values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Environment/sound_speed_indicative")
-        sound_speed_num = None
-
-    # Absorption
-    try:
-        absorption_num = echodata["Environment"].absorption_indicative.values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Environment/absorption_indicative")
-        absorption_num = None
-
-    # transmit duration
-    try:
-        transmit_duration_num = echodata["Sonar/Beam_group1"].transmit_duration_nominal.values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/transmit_duration_nominal")
-        transmit_duration_num = None
+    sound_speed_num = _safe_extract(echodata, "Environment", "sound_speed_indicative", flags)
+    absorption_num = _safe_extract(echodata, "Environment", "absorption_indicative", flags)
+    transmit_duration_num = _safe_extract(echodata, "Sonar/Beam_group1", "transmit_duration_nominal", flags)
 
     try:
         pulse_length_table = echodata["Vendor_specific"].pulse_length.values
@@ -167,8 +137,6 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
         pulse_length_table = None
         pulse_length_indicies = None
 
-
-    # gain correction
     try:
         gain_correction_table = echodata["Vendor_specific"].gain_correction.values
         gain_correction_num = [gain_correction_table[i][pulse_length_indicies[i]] for i in range(len(gain_correction_table))]
@@ -176,94 +144,26 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
         flags["missing_parameters"].append("Vendor_specific/gain_correction")
         gain_correction_num = None
 
-    # sa correction
     try:
         sa_correction_table = echodata["Vendor_specific"].sa_correction.values
         sa_correction_num = [sa_correction_table[i][pulse_length_indicies[i]] for i in range(len(sa_correction_table))]
     except (KeyError, AttributeError, IndexError):
         flags["missing_parameters"].append("Vendor_specific/sa_correction")
         sa_correction_num = None
-        
-    # equivalent_beam_angle
-    try:
-        equivalent_beam_angle_num = echodata["Sonar/Beam_group1"].equivalent_beam_angle.values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/equivalent_beam_angle")
-        equivalent_beam_angle_num = None
 
-    # channels (Transceivers)
-    try:
-        channels = echodata["Sonar/Beam_group1"].channel.values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/channel")
-        channels = None
-
-    # frequencies
-    try:
-        frequency_nominal = echodata["Sonar/Beam_group1"].frequency_nominal.values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/frequency_nominal")
-        frequency_nominal = None
-
-    try:
-        sonar_software_version = echodata["Sonar"].sonar_software_version
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/sonar_software_version")
-        sonar_software_version = None
-
-    try:
-        beamwidth_twoway_athwartship = echodata["Sonar/Beam_group1"]["beamwidth_twoway_athwartship"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/beamwidth_twoway_athwartship")
-        beamwidth_twoway_athwartship = None
-
-    try:
-        beamwidth_twoway_alongship = echodata["Sonar/Beam_group1"]["beamwidth_twoway_alongship"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/beamwidth_twoway_alongship")
-        beamwidth_twoway_alongship = None
-
-    try:
-        angle_offset_athwartship = echodata["Sonar/Beam_group1"]["angle_offset_athwartship"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/angle_offset_athwartship")
-        angle_offset_athwartship = None
-
-    try:
-        angle_offset_alongship = echodata["Sonar/Beam_group1"]["angle_offset_alongship"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/angle_offset_alongship")
-        angle_offset_alongship = None
-
-    try:
-        angle_sensitivity_athwartship = echodata["Sonar/Beam_group1"]["angle_sensitivity_athwartship"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/angle_sensitivity_athwartship")
-        angle_sensitivity_athwartship = None
-
-    try:
-        angle_sensitivity_alongship = echodata["Sonar/Beam_group1"]["angle_sensitivity_alongship"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/angle_sensitivity_alongship")
-        angle_sensitivity_alongship = None
-
-    try:
-        sample_interval = echodata["Sonar/Beam_group1"]["sample_interval"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/sample_interval")
-        sample_interval = None
-
-    try:
-        transmit_power = echodata["Sonar/Beam_group1"]["transmit_power"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/transmit_power")
-        transmit_power = None
-
-    try:
-        transmit_bandwidth = echodata["Sonar/Beam_group1"]["transmit_bandwidth"].values
-    except (KeyError, AttributeError):
-        flags["missing_parameters"].append("Sonar/Beam_group1/transmit_bandwidth")
-        transmit_bandwidth = None
+    equivalent_beam_angle_num = _safe_extract(echodata, "Sonar/Beam_group1", "equivalent_beam_angle", flags)
+    channels = _safe_extract(echodata, "Sonar/Beam_group1", "channel", flags)
+    frequency_nominal = _safe_extract(echodata, "Sonar/Beam_group1", "frequency_nominal", flags)
+    sonar_software_version = _safe_extract(echodata, "Sonar", "sonar_software_version", flags, call_values=False)
+    beamwidth_twoway_athwartship = _safe_extract(echodata, "Sonar/Beam_group1", "beamwidth_twoway_athwartship", flags)
+    beamwidth_twoway_alongship = _safe_extract(echodata, "Sonar/Beam_group1", "beamwidth_twoway_alongship", flags)
+    angle_offset_athwartship = _safe_extract(echodata, "Sonar/Beam_group1", "angle_offset_athwartship", flags)
+    angle_offset_alongship = _safe_extract(echodata, "Sonar/Beam_group1", "angle_offset_alongship", flags)
+    angle_sensitivity_athwartship = _safe_extract(echodata, "Sonar/Beam_group1", "angle_sensitivity_athwartship", flags)
+    angle_sensitivity_alongship = _safe_extract(echodata, "Sonar/Beam_group1", "angle_sensitivity_alongship", flags)
+    sample_interval = _safe_extract(echodata, "Sonar/Beam_group1", "sample_interval", flags)
+    transmit_power = _safe_extract(echodata, "Sonar/Beam_group1", "transmit_power", flags)
+    transmit_bandwidth = _safe_extract(echodata, "Sonar/Beam_group1", "transmit_bandwidth", flags)
 
     # Log missing parameters
     for param in flags["missing_parameters"]:
@@ -288,9 +188,7 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
     check_parameter_changes(absorption_num, "absorption", channels, changes, flags)
     check_parameter_changes(sound_speed_num, "sound_speed", channels, changes, flags)
 
-    # Save updated flags to JSON
-    with open(flags_file, 'w') as f:
-        json.dump(flags, f, indent=2)
+    flags.save()
 
     # Process parameters for return (handle None values)
     if sound_speed_num is not None:

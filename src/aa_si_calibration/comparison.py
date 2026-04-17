@@ -13,6 +13,7 @@ import json
 import os
 from aa_si_utils import utils
 from aa_si_visualization import assorted
+from aa_si_calibration.utils import CalibrationFlags
 
 
 def calculate_full_dataset_effect(ds_modified, ds_baseline, parameter_name, output_logs_folder, thresholds=None):
@@ -52,22 +53,7 @@ def calculate_full_dataset_effect(ds_modified, ds_baseline, parameter_name, outp
         for key, default_value in default_thresholds.items():
             thresholds.setdefault(key, default_value)
     
-    # Ensure output folder exists
-    os.makedirs(output_logs_folder, exist_ok=True)
-    
-    # Load or create calibration flags JSON
-    flags_file = Path(output_logs_folder) / "calibration_flags.json"
-    if flags_file.exists():
-        with open(flags_file, 'r') as f:
-            flags = json.load(f)
-    else:
-        flags = {
-            "moderate_impacts": [],
-            "large_impacts": [],
-            "critical_impacts": [],
-            "data_irregularities": [],
-            "missing_parameters": []
-        }
+    flags = CalibrationFlags(output_logs_folder)
     
     # Calculate difference across all data
     diff_data = ds_modified['Sv'] - ds_baseline['Sv']
@@ -134,9 +120,7 @@ def calculate_full_dataset_effect(ds_modified, ds_baseline, parameter_name, outp
             print(f"{freq_key:>7} | No valid data")
             results[freq_key] = None
     
-    # Save updated flags to JSON
-    with open(flags_file, 'w') as f:
-        json.dump(flags, f, indent=2)
+    flags.save()
     
     print("\n"*2)
     return results
@@ -309,11 +293,21 @@ def compare_calibration_parameters(report_params, original_params, echodata):
     }
     
     formatting = {
-        "sound_speed": 1, "sound_absorption": 6, "equivalent_beam_angle": 1,
-        "gain_correction": 4, "sa_correction": None, "beamwidth_athwartship": 2,
-        "beamwidth_alongship": 2, "angle_offset_athwartship": 2, "angle_offset_alongship": 2,
-        "angle_sensitivity_athwartship": 2, "angle_sensitivity_alongship": 2,
-        "transmit_power": 1, "transmit_bandwidth": 1, "sample_interval": 6, "transmit_duration_nominal": 6
+        "sound_speed": 1, 
+        "sound_absorption": 6, 
+        "equivalent_beam_angle": 1,
+        "gain_correction": 4, 
+        "sa_correction": None, 
+        "beamwidth_athwartship": 2,
+        "beamwidth_alongship": 2, 
+        "angle_offset_athwartship": 2, 
+        "angle_offset_alongship": 2,
+        "angle_sensitivity_athwartship": 2, 
+        "angle_sensitivity_alongship": 2,
+        "transmit_power": 1, 
+        "transmit_bandwidth": 1, 
+        "sample_interval": 6, 
+        "transmit_duration_nominal": 6
     }
     
     def extract_values(val):

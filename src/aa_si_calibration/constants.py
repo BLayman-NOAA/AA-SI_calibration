@@ -21,3 +21,20 @@ STRING_IDENTIFIER_FIELDS = [
     'transceiver_serial_number',
     'transducer_serial_number',
 ]
+
+# Pulse form identifiers used in raw file configurations
+PULSE_FORM_CW = "0"
+PULSE_FORM_FM = "1"
+
+# Placeholder for unknown transducer serial numbers
+TRANSDUCER_SERIAL_UNKNOWN = "NoSN"
+
+# Calibration flags file
+FLAGS_FILENAME = "calibration_flags.json"
+FLAG_CATEGORIES = [
+    "moderate_impacts",
+    "large_impacts",
+    "critical_impacts",
+    "data_irregularities",
+    "missing_parameters",
+]

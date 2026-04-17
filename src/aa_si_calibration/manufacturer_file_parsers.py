@@ -9,7 +9,7 @@ from pathlib import Path
 import json
 import re
 
-from .utils import extract_nominal_frequency_from_transducer_model
+from .utils import extract_nominal_frequency_from_transducer_model, CalibrationFlags
 
 
 
@@ -35,6 +35,7 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
     cal_files = list(cal_folder.glob('*.cal'))
     print(f"Found {len(cal_files)} calibration files in {cal_folder}")
     cal_data_by_freq = {}
+    _line_warnings = []  # Collects line-level parse failures across all files
 
     if cal_files:
         # Parse all calibration files to extract parameters for each frequency
@@ -79,11 +80,16 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                         continue
                     
                     # Extract Comments from header (appears near top before sections)
+                    # Handles both "# Comments: text here" (inline) and
+                    # "# Comments:" followed by "# text on next line"
                     if line_content.startswith('Comments:'):
-                        try:
-                            cal_params['Comments'] = lines[i+1][1:]
-                        except (IndexError, KeyError):
-                            pass
+                        inline_text = line_content[len('Comments:'):].strip()
+                        if inline_text:
+                            cal_params['Comments'] = inline_text
+                        elif i + 1 < len(lines):
+                            next_line = lines[i + 1]
+                            if next_line.startswith('#'):
+                                cal_params['Comments'] = next_line[1:].strip()
                         continue
                     
                     # Identify sections
@@ -191,8 +197,10 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                                     cal_params['Transducer Serial'] = transducer_serial
                                 
                         except ValueError:
-                            # Skip problematic lines without printing errors for expected format variations
-                            pass
+                            _line_warnings.append(
+                                f"EK60 parse warning in {cal_file.name}: could not parse "
+                                f"value in transducer section: {line_content!r}"
+                            )
                         except Exception as e:
                             print(f"      Unexpected error in transducer section: {e}")
                     
@@ -226,7 +234,10 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                                         bandw = float(parts[bandw_idx])
                                         cal_params['Receiver Bandwidth'] = bandw
                         except ValueError:
-                            pass
+                            _line_warnings.append(
+                                f"EK60 parse warning in {cal_file.name}: could not parse "
+                                f"value in transceiver section: {line_content!r}"
+                            )
                         except Exception as e:
                             print(f"      Unexpected error in transceiver section: {e}")
                     
@@ -268,8 +279,10 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                             
                                         
                         except ValueError:
-                            # Skip problematic lines
-                            pass
+                            _line_warnings.append(
+                                f"EK60 parse warning in {cal_file.name}: could not parse "
+                                f"value in environment section: {line_content!r}"
+                            )
                         except Exception as e:
                             print(f"      Unexpected error in environment section: {e}")
                     
@@ -326,8 +339,10 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
                                         break
                                     
                         except ValueError:
-                            # Skip problematic lines
-                            pass
+                            _line_warnings.append(
+                                f"EK60 parse warning in {cal_file.name}: could not parse "
+                                f"value in beam model section: {line_content!r}"
+                            )
                         except Exception as e:
                             print(f"      Unexpected error in beam model section: {e}")
                 
@@ -405,24 +420,12 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
 
 
 
-    # Load or create calibration flags JSON
-    flags_file = Path(output_logs_folder) / "calibration_flags.json"
-    if flags_file.exists():
-        with open(flags_file, 'r') as f:
-            flags = json.load(f)
-    else:
-        flags = {
-            "moderate_impacts": [],
-            "large_impacts": [],
-            "critical_impacts": [],
-            "data_irregularities": [],
-            "missing_parameters": []
-        }
-    
-    # Ensure all required keys exist
-    for key in ["moderate_impacts", "large_impacts", "critical_impacts", "data_irregularities", "missing_parameters"]:
-        flags.setdefault(key, [])
+    flags = CalibrationFlags(output_logs_folder)
 
+    for w in _line_warnings:
+        flags.add("missing_parameters", w)
+    if _line_warnings:
+        print(f"\n{len(_line_warnings)} EK60 line parse warning(s) logged to calibration_flags.json")
 
     # Check for missing parameters and add entries to calibration_flags.json "missing_parameters"
     if len(cal_data_by_freq) > 0:  # Only check if we found calibration params
@@ -470,9 +473,7 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
         flags["missing_parameters"].append("No EK60 calibration files (.cal) found in specified folder")
         print("Warning: No EK60 calibration files (.cal) found in specified folder")
     
-    # Save updated flags to JSON
-    with open(flags_file, 'w') as f:
-        json.dump(flags, f, indent=2)
+    flags.save()
 
     return cal_data_refactored
 
@@ -859,27 +860,11 @@ def _log_ek80_missing_params(output_logs_folder, cal_data_by_channel, is_empty=F
     """Log missing EK80 calibration parameters to flags file.
     
     Args:
-        output_logs_folder: Path to folder for logs
-        cal_data_by_channel: Parsed calibration data dictionary
-        is_empty: True if no calibration files were found
+        output_logs_folder: Path to folder for logs.
+        cal_data_by_channel: Parsed calibration data dictionary.
+        is_empty: True if no calibration files were found.
     """
-    flags_file = Path(output_logs_folder) / "calibration_flags.json"
-    
-    if flags_file.exists():
-        with open(flags_file, 'r') as f:
-            flags = json.load(f)
-    else:
-        flags = {
-            "moderate_impacts": [],
-            "large_impacts": [],
-            "critical_impacts": [],
-            "data_irregularities": [],
-            "missing_parameters": []
-        }
-    
-    for key in ["moderate_impacts", "large_impacts", "critical_impacts", 
-                "data_irregularities", "missing_parameters"]:
-        flags.setdefault(key, [])
+    flags = CalibrationFlags(output_logs_folder)
     
     if is_empty:
         flags["missing_parameters"].append(
@@ -912,11 +897,10 @@ def _log_ek80_missing_params(output_logs_folder, cal_data_by_channel, is_empty=F
             missing = [p for p in expected_parameters if p not in params or params[p] is None]
             for param in missing:
                 msg = f"Missing EK80 parameter '{param}' in channel {channel_key}"
-                flags["missing_parameters"].append(msg)
+                flags.add("missing_parameters", msg)
                 print(f"Warning: {msg}")
     
-    with open(flags_file, 'w') as f:
-        json.dump(flags, f, indent=2)
+    flags.save()
 
 
 def convert_ek80_params_to_pipeline_format(cal_data_refactored):
