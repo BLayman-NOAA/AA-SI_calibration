@@ -600,7 +600,9 @@ def generate_standardized_cal_mapping(
     raw_input_folder,
     cal_input_folder,
     output_base,
-    global_params,
+    global_params=None,
+    cruise_id=None,
+    record_author=None,
     short_filenames=True,
     keep_unused=True,
     conflict_resolution="error",
@@ -625,8 +627,15 @@ def generate_standardized_cal_mapping(
         output_base: Path to the root output directory.  Subdirectories for
             raw configs, single-channel files, mapping files, logs, and
             (optionally) unused calibration files will be created beneath it.
-        global_params: Dict of global parameters applied to every single-channel
-            file (e.g. ``{"cruise_id": "...", "record_author": "..."}``).
+        global_params: Optional dict of global parameters applied to every
+            single-channel file (e.g. ``{"cruise_id": "...",
+            "record_author": "..."}``). Kept for backward compatibility.
+        cruise_id: Optional cruise identifier to apply to every generated
+            single-channel file. Overrides or validates against
+            ``global_params["cruise_id"]`` when provided.
+        record_author: Optional record author to apply to every generated
+            single-channel file. Overrides or validates against
+            ``global_params["record_author"]`` when provided.
         short_filenames: If True, use compact filenames for single-channel
             calibration files and mapping keys (default True).
         keep_unused: If True, unused/rejected calibration files are moved to
@@ -650,6 +659,51 @@ def generate_standardized_cal_mapping(
     raw_input_folder = Path(raw_input_folder)
     cal_input_folder = Path(cal_input_folder)
     output_base = Path(output_base)
+
+    if global_params is not None and not isinstance(global_params, dict):
+        raise TypeError("global_params must be a dict when provided")
+
+    legacy_params = dict(global_params or {})
+    resolved_cruise_id = cruise_id if cruise_id is not None else legacy_params.get("cruise_id")
+    resolved_record_author = (
+        record_author if record_author is not None else legacy_params.get("record_author")
+    )
+
+    if cruise_id is not None and "cruise_id" in legacy_params and legacy_params["cruise_id"] != cruise_id:
+        raise ValueError(
+            "cruise_id does not match global_params['cruise_id']: "
+            f"{cruise_id!r} != {legacy_params['cruise_id']!r}"
+        )
+
+    if (
+        record_author is not None
+        and "record_author" in legacy_params
+        and legacy_params["record_author"] != record_author
+    ):
+        raise ValueError(
+            "record_author does not match global_params['record_author']: "
+            f"{record_author!r} != {legacy_params['record_author']!r}"
+        )
+
+    missing_global_keys = [
+        key
+        for key, value in {
+            "cruise_id": resolved_cruise_id,
+            "record_author": resolved_record_author,
+        }.items()
+        if value is None
+    ]
+    if missing_global_keys:
+        missing_keys_str = ", ".join(missing_global_keys)
+        raise ValueError(
+            "generate_standardized_cal_mapping requires values for "
+            f"{missing_keys_str}. Provide them explicitly or via global_params."
+        )
+
+    global_params = {
+        "cruise_id": resolved_cruise_id,
+        "record_author": resolved_record_author,
+    }
 
     # Create output subdirectories
     raw_configs_output = output_base / "raw_file_configs"

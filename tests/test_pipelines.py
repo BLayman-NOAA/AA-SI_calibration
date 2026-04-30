@@ -21,6 +21,7 @@ Skip slow tests with:          pytest -m "not slow"
 import yaml
 import pytest
 
+from aa_si_calibration import calibration as calibration_module
 from aa_si_calibration.raw_reader_api import (
     process_raw_folder,
     save_yaml,
@@ -52,6 +53,100 @@ _GLOBAL_PARAMS = {
     "cruise_id": "test_run",
     "record_author": "Test Suite",
 }
+
+
+class _DummyMappingResult:
+    def __init__(self):
+        self.mapping_dict = {"file.raw": {"channel-1": "cal-key-1"}}
+        self.calibration_dict = {"cal-key-1": {"gain_correction": 1.0}}
+
+    def print_summary(self):
+        return None
+
+
+def _patch_generate_standardized_cal_mapping(monkeypatch, tmp_path):
+    captured = {}
+    dummy_result = _DummyMappingResult()
+
+    monkeypatch.setattr(
+        calibration_module,
+        "process_raw_folder",
+        lambda *_args, **_kwargs: (
+            [{"filename": "file.raw", "channels": [{"channel_id": "channel-1"}]}],
+            {38000},
+        ),
+    )
+    monkeypatch.setattr(calibration_module, "save_yaml", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        calibration_module.manufacturer_file_parsers,
+        "extract_and_convert_calibration_params",
+        lambda *_args, **_kwargs: (
+            {"gain_correction": [1.0]},
+            {"sound_speed": 1500.0},
+            {"channel": ["channel-1"]},
+            ".cal",
+        ),
+    )
+
+    def _save_single_channel_files(*_args, global_params, **_kwargs):
+        captured["global_params"] = global_params
+        return 1, None, {"saved": True}
+
+    monkeypatch.setattr(
+        calibration_module.standardized_file_lib,
+        "save_single_channel_files_from_params",
+        _save_single_channel_files,
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "load_raw_configs",
+        lambda *_args, **_kwargs: [{"filename": "file.raw"}],
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "load_calibration_data_from_single_files",
+        lambda *_args, **_kwargs: {"channels": ["channel-1"]},
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "build_mapping",
+        lambda *_args, **_kwargs: dummy_result,
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "handle_unused_calibration_files",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "check_for_conflicts",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "print_mapping_preview",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "save_mapping_files",
+        lambda *_args, **_kwargs: (
+            tmp_path / "mapping.yaml",
+            tmp_path / "calibration.yaml",
+        ),
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "check_required_calibration_params",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        calibration_module,
+        "verify_calibration_file_usage",
+        lambda *_args, **_kwargs: [],
+    )
+
+    return captured, dummy_result
 
 
 def _run_full_pipeline(raw_dir, cal_dir, dirs, monkeypatch):
@@ -163,6 +258,58 @@ def _run_full_pipeline(raw_dir, cal_dir, dirs, monkeypatch):
             )
 
     return mapping_dict, calibration_dict
+
+
+def test_generate_standardized_cal_mapping_accepts_explicit_metadata(tmp_path, monkeypatch):
+    captured, dummy_result = _patch_generate_standardized_cal_mapping(monkeypatch, tmp_path)
+
+    result = calibration_module.generate_standardized_cal_mapping(
+        raw_input_folder=tmp_path / "raw",
+        cal_input_folder=tmp_path / "cal",
+        output_base=tmp_path / "out",
+        cruise_id="HB1603",
+        record_author="Tester",
+        short_filenames=False,
+        verbose=False,
+    )
+
+    assert captured["global_params"] == {
+        "cruise_id": "HB1603",
+        "record_author": "Tester",
+    }
+    assert result["mapping_dict"] == dummy_result.mapping_dict
+    assert result["calibration_dict"] == dummy_result.calibration_dict
+
+
+def test_generate_standardized_cal_mapping_accepts_global_params_fallback(tmp_path, monkeypatch):
+    captured, _dummy_result = _patch_generate_standardized_cal_mapping(monkeypatch, tmp_path)
+
+    calibration_module.generate_standardized_cal_mapping(
+        raw_input_folder=tmp_path / "raw",
+        cal_input_folder=tmp_path / "cal",
+        output_base=tmp_path / "out",
+        global_params={"cruise_id": "HB1603", "record_author": "Tester"},
+        short_filenames=False,
+        verbose=False,
+    )
+
+    assert captured["global_params"] == {
+        "cruise_id": "HB1603",
+        "record_author": "Tester",
+    }
+
+
+def test_generate_standardized_cal_mapping_rejects_conflicting_metadata(tmp_path):
+    with pytest.raises(ValueError, match="cruise_id does not match"):
+        calibration_module.generate_standardized_cal_mapping(
+            raw_input_folder=tmp_path / "raw",
+            cal_input_folder=tmp_path / "cal",
+            output_base=tmp_path / "out",
+            global_params={"cruise_id": "OLD", "record_author": "Tester"},
+            cruise_id="NEW",
+            record_author="Tester",
+            verbose=False,
+        )
 
 
 # ---------------------------------------------------------------------------
