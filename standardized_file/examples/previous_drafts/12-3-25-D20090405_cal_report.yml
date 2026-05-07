@@ -1,0 +1,146 @@
+file_creation_date: '2025-12-03T20:11:17.363840+00:00'
+source_file_names:
+- HB_018kHz_cal_02262009.cal
+- HB_038kHz_cal_02262009.cal
+- HB_120kHz_cal_02262009.cal
+- HB_200kHz_cal_02262009.cal
+- readme.txt
+source_file_type: .cal
+source_file_location: null
+source_file_paths: null
+cruise_id: HB0901
+calibration_report_title: null
+calibration_report_DOI: null
+calibration_report: null
+GPT  18 kHz 009072056b0e 1-1 ES18-11:
+  sonar_serial_number: null
+  sonar_software_version: 2.2.0
+  sonar_software_name: null
+  transceiver_id: GPT  18 kHz 009072056b0e 1-1 ES18-11
+  frequency: 18000.0
+  absorption_indicative: 0.0023
+  sound_speed_indicative: 1498.3
+  gain_correction: 22.89
+  sa_correction: -0.64
+  equivalent_beam_angle: -17.3
+  beamwidth_transmit_major: 10.92
+  beamwidth_receive_major: 10.92
+  beamwidth_transmit_minor: 10.85
+  beamwidth_receive_minor: 10.85
+  echoangle_major: 0.08
+  echoangle_minor: -0.07
+  echoangle_major_sensitivity: 13.9
+  echoangle_minor_sensitivity: 13.9
+  sample_interval: 0.0001281452
+  transmit_bandwidth: 1570.0
+  transmit_power: 2000.0
+  transmit_duration_nominal: 0.001024
+  calibration_date: 2/26/2009
+  calibration_comments: '    18 kHz calibration, HB BIGELOW, Narragansett Bay Anchorage,
+    26 Feb. 2009, 64-mm-Cu sphere'
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
+GPT  38 kHz 0090720346bc 2-1 ES38B:
+  sonar_serial_number: null
+  sonar_software_version: 2.2.0
+  sonar_software_name: null
+  transceiver_id: GPT  38 kHz 0090720346bc 2-1 ES38B
+  frequency: 38000.0
+  absorption_indicative: 0.0086
+  sound_speed_indicative: 1498.3
+  gain_correction: 24.5
+  sa_correction: -0.73
+  equivalent_beam_angle: -20.8
+  beamwidth_transmit_major: 7.04
+  beamwidth_receive_major: 7.04
+  beamwidth_transmit_minor: 7.02
+  beamwidth_receive_minor: 7.02
+  echoangle_major: -0.02
+  echoangle_minor: 0.08
+  echoangle_major_sensitivity: 21.9
+  echoangle_minor_sensitivity: 21.9
+  sample_interval: 0.0001281452
+  transmit_bandwidth: 2430.0
+  transmit_power: 1000.0
+  transmit_duration_nominal: 0.001024
+  calibration_date: 2/26/2009
+  calibration_comments: '    18 kHz calibration, HB BIGELOW, Narragansett Bay Anchorage,
+    26 Feb. 2009, 64-mm-Cu sphere'
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
+GPT 120 kHz 0090720580f1 4-1 ES120:
+  sonar_serial_number: null
+  sonar_software_version: 2.2.0
+  sonar_software_name: null
+  transceiver_id: GPT 120 kHz 0090720580f1 4-1 ES120
+  frequency: 120000.0
+  absorption_indicative: 0.0389
+  sound_speed_indicative: 1498.3
+  gain_correction: 26.87
+  sa_correction: -0.37
+  equivalent_beam_angle: -20.9
+  beamwidth_transmit_major: 6.47
+  beamwidth_receive_major: 6.47
+  beamwidth_transmit_minor: 6.6
+  beamwidth_receive_minor: 6.6
+  echoangle_major: 0.1
+  echoangle_minor: -0.1
+  echoangle_major_sensitivity: 23.0
+  echoangle_minor_sensitivity: 23.0
+  sample_interval: 0.0001281452
+  transmit_bandwidth: 3030.0
+  transmit_power: 500.0
+  transmit_duration_nominal: 0.001024
+  calibration_date: 2/26/2009
+  calibration_comments: '    18 kHz calibration, HB BIGELOW, Narragansett Bay Anchorage,
+    26 Feb. 2009, 64-mm-Cu sphere'
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
+GPT 200 kHz 009072034261 3-1 ES200-7:
+  sonar_serial_number: null
+  sonar_software_version: 2.2.0
+  sonar_software_name: null
+  transceiver_id: GPT 200 kHz 009072034261 3-1 ES200-7
+  frequency: 200000.0
+  absorption_indicative: 0.0411
+  sound_speed_indicative: 1498.3
+  gain_correction: 21.19
+  sa_correction: -1.01
+  equivalent_beam_angle: -20.8
+  beamwidth_transmit_major: 7.82
+  beamwidth_receive_major: 7.82
+  beamwidth_transmit_minor: 6.48
+  beamwidth_receive_minor: 6.48
+  echoangle_major: 0.38
+  echoangle_minor: 0.05
+  echoangle_major_sensitivity: 23.0
+  echoangle_minor_sensitivity: 23.0
+  sample_interval: 0.0001254755
+  transmit_bandwidth: 3090.0
+  transmit_power: 300.0
+  transmit_duration_nominal: 0.001024
+  calibration_date: 2/26/2009
+  calibration_comments: '    18 kHz calibration, HB BIGELOW, Narragansett Bay Anchorage,
+    26 Feb. 2009, 64-mm-Cu sphere'
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null

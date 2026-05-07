@@ -1,0 +1,136 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aa-si-calibration"
+version = "0.1.0"
+description = "Calibration routines, standardized formats, and tools for reading and evaluating sonar calibration data for NOAA Fisheries AA-SI."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "NOAA Fisheries AA-SI" },
+]
+maintainers = [
+    { name = "NOAA Fisheries AA-SI" },
+]
+keywords = [
+    "noaa",
+    "fisheries",
+    "acoustics",
+    "calibration",
+    "sonar",
+    "echopype",
+    "echosounder",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy",
+    "pyyaml",
+    "jsonschema",
+    "lxml",
+    "pytz",
+    "rdp",
+]
+
+[project.optional-dependencies]
+echopype = [
+    "echopype",
+    "xarray",
+    "matplotlib",
+]
+schema-docs = [
+    "json-schema-for-humans",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=24.0.0",
+    "pylint>=3.0.0",
+    "pre-commit>=3.0.0",
+]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocstrings[python]>=0.24.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/nmfs-ost/AA-SI_calibration"
+Documentation = "https://nmfs-ost.github.io/AA-SI_calibration/"
+Repository = "https://github.com/nmfs-ost/AA-SI_calibration.git"
+Issues = "https://github.com/nmfs-ost/AA-SI_calibration/issues"
+Changelog = "https://github.com/nmfs-ost/AA-SI_calibration/blob/main/CHANGELOG.md"
+
+# =============================================================================
+# Tool Configuration
+# =============================================================================
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aa_si_calibration"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "slow: marks tests as slow (e2e pipeline tests); deselect with -m 'not slow'",
+]
+
+[tool.coverage.run]
+source = ["src/aa_si_calibration"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+src_paths = ["src", "tests"]
+
+[tool.pylint.main]
+py-version = "3.10"
+source-roots = ["src"]
+
+[tool.pylint.format]
+max-line-length = 88
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",  # Often not needed for simple modules
+]

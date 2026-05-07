@@ -1,0 +1,169 @@
+file_creation_date: '2025-12-03T20:01:07.310415+00:00'
+source_file_names: null
+source_file_type: null
+source_file_location: null
+source_file_paths: null
+cruise_id: HB1603
+calibration_report_title: null
+calibration_report_DOI: null
+calibration_report: null
+GPT  18 kHz 009072056b0e 2-1 ES18-11:
+  sonar_serial_number: null
+  sonar_software_version: 2.4.3
+  sonar_software_name: null
+  transceiver_id: GPT  18 kHz 009072056b0e 2-1 ES18-11
+  frequency: 18000.0
+  absorption_indicative: 0.0017302503110840917
+  sound_speed_indicative: 1524.300048828125
+  gain_correction: 23.110001
+  sa_correction: -0.73
+  equivalent_beam_angle: -17.0
+  beamwidth_transmit_major: 11.0
+  beamwidth_receive_major: 11.0
+  beamwidth_transmit_minor: 11.0
+  beamwidth_receive_minor: 11.0
+  echoangle_major: 0.0
+  echoangle_minor: 0.0
+  echoangle_major_sensitivity: 13.899999618530273
+  echoangle_minor_sensitivity: 13.899999618530273
+  sample_interval: 0.00025599999935366213
+  transmit_bandwidth: 1573.66552734375
+  transmit_power: 2000.0
+  transmit_duration_nominal: 0.0010239999974146485
+  calibration_date: null
+  calibration_comments: null
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
+GPT  38 kHz 0090720346bc 1-1 ES38B:
+  sonar_serial_number: null
+  sonar_software_version: 2.4.3
+  sonar_software_name: null
+  transceiver_id: GPT  38 kHz 0090720346bc 1-1 ES38B
+  frequency: 38000.0
+  absorption_indicative: 0.006816051434725523
+  sound_speed_indicative: 1524.300048828125
+  gain_correction: 24.299999
+  sa_correction: -0.68
+  equivalent_beam_angle: -20.600000381469727
+  beamwidth_transmit_major: 7.099999904632568
+  beamwidth_receive_major: 7.099999904632568
+  beamwidth_transmit_minor: 7.099999904632568
+  beamwidth_receive_minor: 7.099999904632568
+  echoangle_major: 0.0
+  echoangle_minor: 0.0
+  echoangle_major_sensitivity: 21.899999618530273
+  echoangle_minor_sensitivity: 21.899999618530273
+  sample_interval: 0.00025599999935366213
+  transmit_bandwidth: 2425.149658203125
+  transmit_power: 2000.0
+  transmit_duration_nominal: 0.0010239999974146485
+  calibration_date: null
+  calibration_comments: null
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
+GPT  70 kHz 00907206042f 5-1 ES70-7C:
+  sonar_serial_number: null
+  sonar_software_version: 2.4.3
+  sonar_software_name: null
+  transceiver_id: GPT  70 kHz 00907206042f 5-1 ES70-7C
+  frequency: 70000.0
+  absorption_indicative: 0.01973254606127739
+  sound_speed_indicative: 1524.300048828125
+  gain_correction: 24.82
+  sa_correction: -0.11
+  equivalent_beam_angle: -21.0
+  beamwidth_transmit_major: 7.0
+  beamwidth_receive_major: 7.0
+  beamwidth_transmit_minor: 7.0
+  beamwidth_receive_minor: 7.0
+  echoangle_major: 0.0
+  echoangle_minor: 0.0
+  echoangle_major_sensitivity: 23.0
+  echoangle_minor_sensitivity: 23.0
+  sample_interval: 0.00025599999935366213
+  transmit_bandwidth: 2859.129150390625
+  transmit_power: 750.0
+  transmit_duration_nominal: 0.0010239999974146485
+  calibration_date: null
+  calibration_comments: null
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
+GPT 120 kHz 0090720580f1 3-1 ES120-7:
+  sonar_serial_number: null
+  sonar_software_version: 2.4.3
+  sonar_software_name: null
+  transceiver_id: GPT 120 kHz 0090720580f1 3-1 ES120-7
+  frequency: 120000.0
+  absorption_indicative: 0.04253685474395752
+  sound_speed_indicative: 1524.300048828125
+  gain_correction: 26.74
+  sa_correction: -0.34
+  equivalent_beam_angle: -20.799999237060547
+  beamwidth_transmit_major: 7.099999904632568
+  beamwidth_receive_major: 7.099999904632568
+  beamwidth_transmit_minor: 7.099999904632568
+  beamwidth_receive_minor: 7.099999904632568
+  echoangle_major: 0.0
+  echoangle_minor: 0.0
+  echoangle_major_sensitivity: 21.0
+  echoangle_minor_sensitivity: 21.0
+  sample_interval: 0.00025599999935366213
+  transmit_bandwidth: 3026.3916015625
+  transmit_power: 500.0
+  transmit_duration_nominal: 0.0010239999974146485
+  calibration_date: null
+  calibration_comments: null
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null
+GPT 200 kHz 009072034261 4-1 ES200-7:
+  sonar_serial_number: null
+  sonar_software_version: 2.4.3
+  sonar_software_name: null
+  transceiver_id: GPT 200 kHz 009072034261 4-1 ES200-7
+  frequency: 200000.0
+  absorption_indicative: 0.07106417417526245
+  sound_speed_indicative: 1524.300048828125
+  gain_correction: 26.969999
+  sa_correction: -0.49
+  equivalent_beam_angle: -20.700000762939453
+  beamwidth_transmit_major: 7.0
+  beamwidth_receive_major: 7.0
+  beamwidth_transmit_minor: 7.0
+  beamwidth_receive_minor: 7.0
+  echoangle_major: 0.0
+  echoangle_minor: 0.0
+  echoangle_major_sensitivity: 23.0
+  echoangle_minor_sensitivity: 23.0
+  sample_interval: 0.00025599999935366213
+  transmit_bandwidth: 3088.400390625
+  transmit_power: 300.0
+  transmit_duration_nominal: 0.0010239999974146485
+  calibration_date: null
+  calibration_comments: null
+  calibration_version: null
+  instrument_transducer_beam_type: null
+  calibration_acquisition_method: null
+  sphere_diameter: null
+  sphere_material: null
+  temperature: null
+  salinity: null

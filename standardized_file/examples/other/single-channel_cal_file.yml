@@ -1,0 +1,71 @@
+?file_creation_date:                             # date and/or time in RFC9557 format, https://datatracker.ietf.org/doc/rfc9557
+
+# Should there be some cruise metadata so the file can be linked to a survey?
+# ?YES. We should work the NCEI to ensure we can link to a survey or set of data 
+
+# ?should we have fields explicitly for units?
+# ?I think it would be best to have a units field for each value, in addition the comment
+
+###
+# one organizational question is do we have one of these files per channel or multiple channels within this file? In general, all channels are calibrated at the same time for a given survey or set of data. But, that is not always the case, and those cases are not rare, or maybe not even uncommon. 
+# Organization methods:
+# 1. The most general method seems to me to have one yaml file per channel. This will result in a fair amount of duplication of metadata, but I think it is the cleanest. 
+# 2. One file for the channels that were calibrated at that time. This has less duplication, but I think more ambiguity if a set of channels were calibrated on one date and another set on another date.
+# 3. One file for all the channels. This will require a code for each channel as to whether the calibration is valid or not for that calibration exercise.
+
+# ?I added all the fields from AcMeta
+# ?I added Brett's fields as well
+calibration_metadata:
+    ?calibration: Yes                                  # controlled vocabulary "Yes" or "No"
+    calibration_date: 01/02/2024
+    calibration_acquisition_method: Standard sphere, in-situ  # Section A.3. https://github.com/ices-publications/AcMeta/blob/master/docs/acmeta.adoc#list_calibration_method
+    calibration_processing_method: Section '4.1.2.3 On-axis calibration' from Demer, D., Berger, L., Bernasconi, M., Bethke, E., Boswell, K., Chu, D., Domokos, R., et al. 2015. Calibration of acoustic instruments. ICES Cooperative Research Report No. 326. 133 pp.
+    ?calibration_software: EK60                        # the software used to generate the calibration values. Kongsberg/Simrad calibration, Echoview, ...
+    ?calibration_report_title: null                    # title of the calibration report
+    ?calibration_report_name: null                     # file name of the report
+    ?calibration_report_path: null                     # network path to the file
+    ?calibration_report_DOI: null                      # URL and/or DOI to report
+    ?calibration_comments: null                        # string of comments
+    ?calibration_target_material: WC                   # controlled vocabulary. Could spell out or have codes.
+    ?calibration_target_diameter: 38.1                 # number or other for non-spherical targets
+    ?calibration_target_diameter_units: millimeter     # controlled vocabulary
+    ?data_file_names: null                             # list of data file names. I changed source to data.
+    ?data_file_type: null                              # list of data file types. I changed source to data.
+    ?data_file_location: null                          # list of data file locations. I changed source to data.
+    ?data_file_paths: null                             # list of data file paths. I changed source to data.
+    ?data_file_DOI: null                               # DOI of the source files. These will come from NCEI. I changed source to data.
+    ?calibration_accuracy_estimate: 0
+    ?calibration_accuracy_estimate_units: dB
+    ?temperature: null                                 # temperature at the target that was used to calculate the sound speed and acoustic wavelength
+    ?salinity: null                                    # salinity at the target that was used to calculate the sound speed and acoustic wavelength
+    ?absorption_indicative: 0.0027830777689814568      # precision?
+    ?sound_speed_indicative: 1465.80                   # two-decimal precision
+    ?sonar_serial_number: null                         # do we need this or can we parse from the channel ID?
+    ?sonar_software_version: 2.2.0                     # Acquisition software version
+    ?sonar_software_name: null                         # Acquisition software name
+
+
+calibration_parameters:
+
+    #  An example of an CW calibration using an EK60 GPT and ER60 software
+    GPT  18 kHz 009072056b0e 1-1 ES18-11:
+      ?transceiver_id: GPT  18 kHz 009072056b0e 1-1 ES18-11  # I don't think we need this since it is the channel ID for this section.
+      ?frequency: 18000.0                                    # transmit frequency (Hertz)
+      ?gain_correction: 22.89                                # two-decimal precision       
+      ?sa_correction: -0.64                                  # two-decimal precision
+      ?equivalent_beam_angle: -17.30                         # two-decimal precision 
+      ?beamwidth_transmit_major: 10.89                       # two-decimal precision
+      ?beamwidth_receive_major: 10.89                        # two-decimal precision
+      ?beamwidth_transmit_minor: 10.89                       # two-decimal precision
+      ?beamwidth_receive_minor: 10.89                        # two-decimal precision
+      ?echoangle_major: 0.00                                 # two-decimal precision
+      ?echoangle_minor: 0.00                                 # two-decimal precision
+      ?echoangle_major_sensitivity: 13.899999618530273       # ? precision
+      ?echoangle_minor_sensitivity: 13.899999618530273       # ? precision
+      ?sample_interval: 0.00025599999935366213               # ? precision
+      ?transmit_bandwidth: 1573.66552734375                  # ? precision
+      ?transmit_power: 2000.0                                # one-decimal precision
+      ?transmit_duration_nominal: 0.0010239999974146485      # ? precision
+      ?transducer_beam_type: null
+
+
