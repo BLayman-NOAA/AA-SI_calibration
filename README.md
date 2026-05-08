@@ -64,7 +64,7 @@ As part of the calibration effort, we've started documenting differences between
 
 ```bash
 # Clone the repository
-git clone https://github.com/nmfs-ost/AA-SI_calibration.git
+git clone https://github.com/BLayman-NOAA/AA-SI_calibration.git
 cd AA-SI_calibration
 
 # Install in development mode

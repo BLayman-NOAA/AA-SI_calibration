@@ -68,11 +68,11 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nmfs-ost/AA-SI_calibration"
-Documentation = "https://nmfs-ost.github.io/AA-SI_calibration/"
-Repository = "https://github.com/nmfs-ost/AA-SI_calibration.git"
-Issues = "https://github.com/nmfs-ost/AA-SI_calibration/issues"
-Changelog = "https://github.com/nmfs-ost/AA-SI_calibration/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/BLayman-NOAA/AA-SI_calibration"
+Documentation = "https://BLayman-NOAA.github.io/AA-SI_calibration/"
+Repository = "https://github.com/BLayman-NOAA/AA-SI_calibration.git"
+Issues = "https://github.com/BLayman-NOAA/AA-SI_calibration/issues"
+Changelog = "https://github.com/BLayman-NOAA/AA-SI_calibration/blob/main/CHANGELOG.md"
 
 # =============================================================================
 # Tool Configuration
