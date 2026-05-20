@@ -682,7 +682,7 @@ def get_calibration(
 def save_mapping_files(
     result: MappingResult,
     output_dir: str | Path,
-    mapping_filename: str = "channel_to_calibration_mapping.yaml",
+    mapping_filename: str = "channel_mapping.yaml",
     calibration_filename: str = "calibration_configurations.yaml",
     short_filenames: bool = False,
 ) -> Tuple[Path, Path]:

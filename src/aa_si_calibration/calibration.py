@@ -353,7 +353,7 @@ def load_standardized_calibration_parameters(
     echodata=None,
     single_cal_subdir="single_channel_calibration_files",
     mapping_subdir="mapping_files",
-    mapping_filename="channel_to_calibration_mapping.yaml",
+    mapping_filename="channel_mapping.yaml",
 ):
     """Load standardized calibration files and return comparison-format parameters.
 
@@ -380,7 +380,7 @@ def load_standardized_calibration_parameters(
         mapping_subdir: Name of the subdirectory containing the mapping YAML
             (default ``"mapping_files"``).
         mapping_filename: Name of the mapping YAML file
-            (default ``"channel_to_calibration_mapping.yaml"``).
+            (default ``"channel_mapping.yaml"``).
 
     Returns:
         dict with keys:
