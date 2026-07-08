@@ -15,6 +15,7 @@ import re
 
 from aa_si_calibration.utils import CalibrationFlags
 
+from aa_si_calibration import _storage
 from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
 from aa_si_calibration import manufacturer_file_parsers
 from aa_si_calibration import standardized_file_lib
@@ -596,6 +597,81 @@ def print_calibration_values(echodata, params, title="Calibration Values"):
 
 
 
+def _process_raw_folder_remote(
+    raw_url,
+    storage_options=None,
+    verbose=True,
+    verify_start_time=False,
+    file_time_start=None,
+    file_time_end=None,
+):
+    """Scan a remote (``gs://``) folder of .raw files one file at a time.
+
+    Mirrors :func:`process_raw_folder`'s contract, but downloads each file to a
+    private local scratch dir, scans it, and deletes the local copy before the
+    next file is fetched — so local disk only ever holds one raw file. The
+    filename-time filter is applied to the listing, so excluded files are never
+    downloaded. Bucket objects are never modified or removed.
+
+    Returns:
+        tuple: ``(file_configs, frequencies_set)``, sorted identically to
+        :func:`process_raw_folder`.
+    """
+    from .raw_reader_api import _config_sort_key, process_raw_file
+
+    raw_urls = _storage.glob_url(raw_url, "*.raw", storage_options)
+    if not raw_urls:
+        raise FileNotFoundError(f"No .raw files found in: {raw_url}")
+
+    if file_time_start is not None or file_time_end is not None:
+        before = len(raw_urls)
+        raw_urls = _storage.filter_paths_by_file_time(
+            raw_urls, file_time_start, file_time_end
+        )
+        if verbose:
+            print(
+                f"  Filename-time filter: {before} -> {len(raw_urls)} raw file(s) "
+                f"({file_time_start} to {file_time_end})"
+            )
+        if not raw_urls:
+            raise FileNotFoundError(
+                f"No .raw files in {raw_url} within the filename-time window "
+                f"({file_time_start} to {file_time_end})"
+            )
+
+    if verbose:
+        print(f"Found {len(raw_urls)} raw files in {raw_url}")
+        for url in raw_urls:
+            print(f"  - {_storage.basename(url)}")
+
+    file_configs = []
+    frequencies_set = set()
+
+    for url in raw_urls:
+        with _storage.localized_file(url, storage_options=storage_options) as local_raw:
+            file_config = process_raw_file(
+                local_raw, verbose=verbose, verify_start_time=verify_start_time
+            )
+        # The local copy is gone by here, before the next file downloads.
+        if file_config is None:
+            continue
+
+        file_configs.append(file_config)
+        for ch in file_config.get("channels", []):
+            if "frequency" in ch:
+                frequencies_set.add(ch["frequency"])
+
+    file_configs.sort(key=_config_sort_key)
+
+    if verbose:
+        print("\n" + "=" * 80)
+        print(f"SUMMARY: Processed {len(file_configs)} files (sorted by metadata_start_time)")
+        print(f"Unique frequencies found: {sorted(frequencies_set)} Hz")
+        print("=" * 80)
+
+    return file_configs, frequencies_set
+
+
 def generate_standardized_cal_mapping(
     raw_input_folder,
     cal_input_folder,
@@ -607,6 +683,9 @@ def generate_standardized_cal_mapping(
     keep_unused=True,
     conflict_resolution="error",
     verbose=True,
+    verify_start_time=False,
+    file_time_start=None,
+    file_time_end=None,
 ):
     """Run the full calibration pipeline: raw config extraction, calibration
     standardization, channel-to-calibration mapping, and verification.
@@ -621,9 +700,15 @@ def generate_standardized_cal_mapping(
          every remaining single-channel file is referenced by the mapping.
 
     Args:
-        raw_input_folder: Path to folder containing .raw files.
+        raw_input_folder: Path to folder containing .raw files. May be a remote
+            fsspec URL (``gs://bucket/survey/raw``), in which case each raw file
+            is downloaded to local scratch, scanned, and its local copy deleted
+            before the next is fetched. Requires ``pip install
+            aa-si-calibration[gcs]``.
         cal_input_folder: Path to folder containing manufacturer calibration
-            files (.cal for EK60 or .xml for EK80).
+            files (.cal for EK60 or .xml for EK80). May be a remote fsspec URL;
+            these files are small, so the folder is downloaded to a local
+            scratch directory for the duration of the parse.
         output_base: Path to the root output directory.  Subdirectories for
             raw configs, single-channel files, mapping files, logs, and
             (optionally) unused calibration files will be created beneath it.
@@ -645,6 +730,16 @@ def generate_standardized_cal_mapping(
             calibration files.  ``"interactive"`` prompts the user to choose;
             ``"error"`` raises a ValueError listing the conflicts (default).
         verbose: If True, print progress information (default True).
+        verify_start_time: Forwarded to process_raw_folder. If True, EK80 files
+            are additionally read with the full SimradFileReader to verify
+            metadata_start_time (slower). Default False uses the fast single
+            pass scan.
+        file_time_start: Optional inclusive lower bound (ISO string or datetime)
+            on the datetime encoded in each raw file's name
+            (``D{YYYYMMDD}-T{HHMMSS}``), restricting which raw files are scanned.
+            Should match the window used to select files for processing. For a
+            remote folder the filter runs before any file is downloaded.
+        file_time_end: Optional inclusive upper bound; see *file_time_start*.
 
     Returns:
         dict with keys:
@@ -656,8 +751,14 @@ def generate_standardized_cal_mapping(
             - unused_files: List of Path objects for calibration files not
               referenced by the mapping (empty list means all used).
     """
-    raw_input_folder = Path(raw_input_folder)
-    cal_input_folder = Path(cal_input_folder)
+    # Coerce only local values: Path() mangles a URL ("gs://b/x" -> "gs:/b/x").
+    # Outputs always stay local, so output_base is coerced unconditionally.
+    raw_input_remote = _storage.is_remote(raw_input_folder)
+    cal_input_remote = _storage.is_remote(cal_input_folder)
+    if not raw_input_remote:
+        raw_input_folder = Path(raw_input_folder)
+    if not cal_input_remote:
+        cal_input_folder = Path(cal_input_folder)
     output_base = Path(output_base)
 
     if global_params is not None and not isinstance(global_params, dict):
@@ -732,19 +833,78 @@ def generate_standardized_cal_mapping(
             print(f"Found {len(existing_cal_files)} existing single-channel calibration "
                   f"file(s) in {single_cal_output}, skipping Steps 1-2.")
     else:
+        input_options = (
+            _storage.execution_storage_options()
+            if (raw_input_remote or cal_input_remote)
+            else None
+        )
+
         # Step 1: Read raw file configurations
-        file_configs, frequencies_set = process_raw_folder(raw_input_folder, verbose=verbose)
+        if raw_input_remote:
+            file_configs, frequencies_set = _process_raw_folder_remote(
+                str(raw_input_folder),
+                storage_options=input_options,
+                verbose=verbose,
+                verify_start_time=verify_start_time,
+                file_time_start=file_time_start,
+                file_time_end=file_time_end,
+            )
+        else:
+            # Filter the glob result up front so excluded files are never read.
+            local_raw_files = sorted(raw_input_folder.glob("*.raw"))
+            if file_time_start is not None or file_time_end is not None:
+                before = len(local_raw_files)
+                local_raw_files = _storage.filter_paths_by_file_time(
+                    local_raw_files, file_time_start, file_time_end
+                )
+                if verbose:
+                    print(
+                        f"  Filename-time filter: {before} -> "
+                        f"{len(local_raw_files)} raw file(s) "
+                        f"({file_time_start} to {file_time_end})"
+                    )
+                if not local_raw_files:
+                    raise FileNotFoundError(
+                        f"No .raw files in {raw_input_folder} within the "
+                        f"filename-time window ({file_time_start} to {file_time_end})"
+                    )
+                raw_files_arg = local_raw_files
+            else:
+                # Let process_raw_folder glob as before (byte-identical path).
+                raw_files_arg = None
+
+            file_configs, frequencies_set = process_raw_folder(
+                raw_input_folder,
+                verbose=verbose,
+                verify_start_time=verify_start_time,
+                raw_files=raw_files_arg,
+            )
         save_yaml(file_configs, raw_configs_path)
         if verbose:
             print(f"\nSaved raw file configurations to: {raw_configs_path}")
 
-        # Step 2: Parse manufacturer calibration files
-        cal_params, env_params, other_params, cal_file_type = \
-            manufacturer_file_parsers.extract_and_convert_calibration_params(
-                cal_input_folder,
-                nc_frequencies=frequencies_set,
-                output_logs_folder=logs_output,
-            )
+        # Step 2: Parse manufacturer calibration files. The parsers are strictly
+        # local-filesystem code, so a remote cal folder is materialized locally
+        # for the duration of the parse (these files are small).
+        if cal_input_remote:
+            with _storage.localized_folder(
+                str(cal_input_folder),
+                ("*.cal", "*.xml"),
+                input_options,
+            ) as local_cal_folder:
+                cal_params, env_params, other_params, cal_file_type = \
+                    manufacturer_file_parsers.extract_and_convert_calibration_params(
+                        local_cal_folder,
+                        nc_frequencies=frequencies_set,
+                        output_logs_folder=logs_output,
+                    )
+        else:
+            cal_params, env_params, other_params, cal_file_type = \
+                manufacturer_file_parsers.extract_and_convert_calibration_params(
+                    cal_input_folder,
+                    nc_frequencies=frequencies_set,
+                    output_logs_folder=logs_output,
+                )
 
         if verbose:
             print(f"\nParsed {cal_file_type} calibration parameters:")

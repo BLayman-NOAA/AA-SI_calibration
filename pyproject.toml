@@ -51,6 +51,11 @@ echopype = [
     "xarray",
     "matplotlib",
 ]
+# Read raw/calibration input folders from cloud object storage (gs:// URLs).
+gcs = [
+    "fsspec>=2024.1",
+    "gcsfs>=2024.1",
+]
 schema-docs = [
     "json-schema-for-humans",
 ]
@@ -60,6 +65,8 @@ dev = [
     "black>=24.0.0",
     "pylint>=3.0.0",
     "pre-commit>=3.0.0",
+    # memory:// stands in for gs:// in the remote-input tests (no credentials).
+    "fsspec>=2024.1",
 ]
 docs = [
     "mkdocs>=1.5.0",

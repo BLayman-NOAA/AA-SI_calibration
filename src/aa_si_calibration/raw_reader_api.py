@@ -253,24 +253,54 @@ def _xml_element_to_dict(elem):
     return node
 
 
-def _read_xml_roots(raw_path):
-    """Yield XML root elements from XML0 datagrams in an EK80 raw file."""
-    parser = ET.XMLParser(resolve_entities=False, recover=True)
+def _iter_datagrams(raw_path, read_types=(b"XML0", b"NME0")):
+    """Walk a Simrad raw file once, yielding one tuple per datagram.
+
+    The datagram envelope (leading size, type, NT timestamp, body, trailing
+    size) is identical for EK60 and EK80 files, so this walker is shared by all
+    the extraction functions.
+
+    Args:
+        raw_path: Path to the raw file.
+        read_types: Datagram type codes whose body bytes should be read. For
+            these types the trailing size is stripped so body is the payload
+            only. All other types are skipped with a seek and yield a body of
+            None, so the large RAW3 sample payloads are never transferred.
+
+    Yields:
+        Tuples of (dg_type, timestamp, body), where timestamp is a UTC datetime
+        or None when the raw NT value is out of range.
+    """
     with open(raw_path, "rb") as fid:
         while True:
             header = fid.read(16)
             if len(header) < 16:
                 break
-            dg_size, dg_type, _ = unpack("=I4sQ", header)
-            if dg_type == b"XML0":
-                dg_body = fid.read(dg_size - 8)
-                raw_xml = dg_body[: dg_size - 12]
-                try:
-                    yield ET.fromstring(raw_xml, parser=parser)
-                except ET.XMLSyntaxError:
-                    continue
+            dg_size, dg_type, nt_timestamp = unpack("=I4sQ", header)
+
+            try:
+                timestamp = nt_to_datetime(nt_timestamp)
+            except (ValueError, OverflowError):
+                timestamp = None
+
+            if dg_type in read_types:
+                rest = fid.read(dg_size - 8)
+                yield dg_type, timestamp, rest[: dg_size - 12]
             else:
                 fid.seek(dg_size - 8, 1)
+                yield dg_type, timestamp, None
+
+
+def _read_xml_roots(raw_path):
+    """Yield XML root elements from XML0 datagrams in an EK80 raw file."""
+    parser = ET.XMLParser(resolve_entities=False, recover=True)
+    for dg_type, _timestamp, body in _iter_datagrams(raw_path, read_types=(b"XML0",)):
+        if dg_type != b"XML0":
+            continue
+        try:
+            yield ET.fromstring(body, parser=parser)
+        except ET.XMLSyntaxError:
+            continue
 
 
 def read_ek80_xml_as_dict(raw_path):
@@ -435,6 +465,65 @@ def parse_nmea_latlon(nmea_string):
         return None, None
 
 
+def _new_gps_state():
+    """Fresh accumulator for GPS/NME0 extraction."""
+    return {
+        "first_gps": None,
+        "last_gps": None,
+        "nmea_count": 0,
+        "valid_gps_count": 0,
+        "sentence_types": set(),
+    }
+
+
+def _accumulate_nme0(nmea_body, timestamp, state):
+    """Update the GPS state dict from a single NME0 datagram body.
+
+    Shared by extract_gps_data and scan_ek80_file so both apply identical NMEA
+    parsing.
+
+    Args:
+        nmea_body: Raw NME0 datagram payload bytes.
+        timestamp: Datagram timestamp, or None if unparseable.
+        state: Accumulator dict from _new_gps_state, updated in place.
+    """
+    state["nmea_count"] += 1
+
+    try:
+        nmea_string = nmea_body.decode("utf-8", errors="replace").strip("\x00")
+    except (UnicodeDecodeError, AttributeError):
+        return
+
+    type_match = re.search(r'\$?([A-Z]{2}(?:GGA|GLL|RMC|GGK))', nmea_string)
+    if type_match:
+        state["sentence_types"].add(type_match.group(1))
+
+    lat, lon = parse_nmea_latlon(nmea_string)
+    if lat is not None and lon is not None:
+        state["valid_gps_count"] += 1
+        state["last_gps"] = {
+            "latitude": lat,
+            "longitude": lon,
+            "timestamp": timestamp.isoformat() if timestamp else None,
+            "nmea_sentence": (
+                nmea_string[:80] + "..." if len(nmea_string) > 80 else nmea_string
+            ),
+        }
+        if state["first_gps"] is None:
+            state["first_gps"] = state["last_gps"]
+
+
+def _finalize_gps_state(state):
+    """Convert a GPS accumulator into the extract_gps_data return dict."""
+    return {
+        "first_gps": state["first_gps"],
+        "last_gps": state["last_gps"],
+        "nmea_count": state["nmea_count"],
+        "valid_gps_count": state["valid_gps_count"],
+        "sentence_types": list(state["sentence_types"]),
+    }
+
+
 def extract_gps_data(raw_path):
     """Extract first and last GPS coordinates from a raw file's NMEA datagrams.
     
@@ -452,72 +541,11 @@ def extract_gps_data(raw_path):
           - valid_gps_count: number of datagrams with valid lat/lon
           - sentence_types: set of NMEA sentence types found
     """
-    first_gps = None
-    last_gps = None
-    nmea_count = 0
-    valid_gps_count = 0
-    sentence_types = set()
-    
-    with open(raw_path, "rb") as fid:
-        while True:
-            header = fid.read(16)
-            if len(header) < 16:
-                break
-            
-            dg_size, dg_type, nt_timestamp = unpack("=I4sQ", header)
-            
-            if dg_type == b"NME0":
-                nmea_count += 1
-                
-                # Read NMEA sentence from datagram body
-                body_size = dg_size - 12  # Subtract header (4+4) and trailing size (4)
-                nmea_body = fid.read(body_size)
-                
-                # Skip trailing datagram size (4 bytes)
-                fid.read(4)
-                
-                try:
-                    nmea_string = nmea_body.decode('utf-8', errors='replace').strip('\x00')
-                except (UnicodeDecodeError, AttributeError):
-                    continue
-                
-                # Identify sentence type
-                type_match = re.search(r'\$?([A-Z]{2}(?:GGA|GLL|RMC|GGK))', nmea_string)
-                if type_match:
-                    sentence_types.add(type_match.group(1))
-                
-                # Parse lat/lon
-                lat, lon = parse_nmea_latlon(nmea_string)
-                
-                if lat is not None and lon is not None:
-                    valid_gps_count += 1
-                    
-                    try:
-                        timestamp = nt_to_datetime(nt_timestamp)
-                    except (ValueError, OverflowError):
-                        timestamp = None
-                    
-                    gps_point = {
-                        "latitude": lat,
-                        "longitude": lon,
-                        "timestamp": timestamp.isoformat() if timestamp else None,
-                        "nmea_sentence": nmea_string[:80] + "..." if len(nmea_string) > 80 else nmea_string,
-                    }
-                    
-                    if first_gps is None:
-                        first_gps = gps_point
-                    last_gps = gps_point
-            else:
-                # Skip to next datagram
-                fid.seek(dg_size - 8, 1)
-    
-    return {
-        "first_gps": first_gps,
-        "last_gps": last_gps,
-        "nmea_count": nmea_count,
-        "valid_gps_count": valid_gps_count,
-        "sentence_types": list(sentence_types),
-    }
+    state = _new_gps_state()
+    for dg_type, timestamp, body in _iter_datagrams(raw_path, read_types=(b"NME0",)):
+        if dg_type == b"NME0":
+            _accumulate_nme0(body, timestamp, state)
+    return _finalize_gps_state(state)
 
 
 def extract_datagram_timestamps(raw_path):
@@ -577,6 +605,59 @@ def extract_datagram_timestamps(raw_path):
     }
 
 
+def _new_ek80_timestamp_state():
+    """Fresh accumulator for EK80 datagram timestamp extraction."""
+    return {
+        "xml0_timestamp": None,
+        "first_raw3_timestamp": None,
+        "last_raw3_timestamp": None,
+        "first_datagram_timestamp": None,
+        "last_datagram_timestamp": None,
+        "raw3_count": 0,
+    }
+
+
+def _accumulate_ek80_timestamp(dg_type, timestamp, state):
+    """Update the EK80 timestamp state from one datagram.
+
+    Datagrams whose NT timestamp could not be parsed (timestamp is None) are
+    skipped.
+
+    Args:
+        dg_type: Datagram type code.
+        timestamp: Datagram timestamp, or None if unparseable.
+        state: Accumulator dict from _new_ek80_timestamp_state, updated in
+            place.
+    """
+    if timestamp is None:
+        return
+
+    if state["first_datagram_timestamp"] is None:
+        state["first_datagram_timestamp"] = timestamp
+    state["last_datagram_timestamp"] = timestamp
+
+    if dg_type == b"XML0" and state["xml0_timestamp"] is None:
+        state["xml0_timestamp"] = timestamp
+
+    if dg_type == b"RAW3":
+        state["raw3_count"] += 1
+        if state["first_raw3_timestamp"] is None:
+            state["first_raw3_timestamp"] = timestamp
+        state["last_raw3_timestamp"] = timestamp
+
+
+def _finalize_ek80_timestamp_state(state):
+    """Convert an EK80 timestamp accumulator into the return dict."""
+    return {
+        "xml0_timestamp": state["xml0_timestamp"],
+        "first_raw3_timestamp": truncate_to_milliseconds(state["first_raw3_timestamp"]),
+        "last_raw3_timestamp": truncate_to_milliseconds(state["last_raw3_timestamp"]),
+        "first_datagram_timestamp": state["first_datagram_timestamp"],
+        "last_datagram_timestamp": state["last_datagram_timestamp"],
+        "raw3_count": state["raw3_count"],
+    }
+
+
 def extract_ek80_datagram_timestamps(raw_path):
     """Extract timestamps from EK80 raw file datagrams.
     
@@ -590,49 +671,61 @@ def extract_ek80_datagram_timestamps(raw_path):
       - last_datagram_timestamp: latest timestamp encountered
       - raw3_count: total number of RAW3 datagrams
     """
-    xml0_timestamp = None
-    first_raw3_timestamp = None
-    last_raw3_timestamp = None
-    first_datagram_timestamp = None
-    last_datagram_timestamp = None
-    raw3_count = 0
-    
-    with open(raw_path, "rb") as fid:
-        while True:
-            header = fid.read(16)
-            if len(header) < 16:
-                break
-            
-            dg_size, dg_type, nt_timestamp = unpack("=I4sQ", header)
-            
+    state = _new_ek80_timestamp_state()
+    for dg_type, timestamp, _body in _iter_datagrams(raw_path, read_types=()):
+        _accumulate_ek80_timestamp(dg_type, timestamp, state)
+    return _finalize_ek80_timestamp_state(state)
+
+
+def scan_ek80_file(raw_path):
+    """Scan an EK80 raw file in a single pass.
+
+    Walks the file once, reading only the datagram headers plus the small XML0
+    and NME0 bodies and skipping the large RAW3 sample payloads. Produces all
+    the pieces extract_ek80_file_config needs.
+
+    Args:
+        raw_path: Path to the EK80 raw file.
+
+    Returns:
+        A dict with keys:
+            xml_dicts: XML configuration and parameter dicts, as
+                read_ek80_xml_as_dict returns.
+            timestamps: RAW3 and datagram timestamps, as
+                extract_ek80_datagram_timestamps returns.
+            gps_data: First and last GPS fixes, as extract_gps_data returns.
+            metadata_start_time: The first datagram time formatted as
+                %Y-%m-%dT%H:%M:%S, or None when the file has no parseable
+                timestamps.
+    """
+    xml_parser = ET.XMLParser(resolve_entities=False, recover=True)
+    xml_dicts = []
+    ts_state = _new_ek80_timestamp_state()
+    gps_state = _new_gps_state()
+
+    for dg_type, timestamp, body in _iter_datagrams(
+        raw_path, read_types=(b"XML0", b"NME0")
+    ):
+        _accumulate_ek80_timestamp(dg_type, timestamp, ts_state)
+        if dg_type == b"XML0":
             try:
-                timestamp = nt_to_datetime(nt_timestamp)
-            except (ValueError, OverflowError):
-                fid.seek(dg_size - 8, 1)
+                root = ET.fromstring(body, parser=xml_parser)
+            except ET.XMLSyntaxError:
                 continue
-            
-            if first_datagram_timestamp is None:
-                first_datagram_timestamp = timestamp
-            last_datagram_timestamp = timestamp
-            
-            if dg_type == b"XML0" and xml0_timestamp is None:
-                xml0_timestamp = timestamp
-            
-            if dg_type == b"RAW3":
-                raw3_count += 1
-                if first_raw3_timestamp is None:
-                    first_raw3_timestamp = timestamp
-                last_raw3_timestamp = timestamp
-            
-            fid.seek(dg_size - 8, 1)
-    
+            xml_dicts.append(_xml_element_to_dict(root))
+        elif dg_type == b"NME0":
+            _accumulate_nme0(body, timestamp, gps_state)
+
+    first_dg = ts_state["first_datagram_timestamp"]
+    metadata_start_time = (
+        first_dg.strftime("%Y-%m-%dT%H:%M:%S") if first_dg else None
+    )
+
     return {
-        "xml0_timestamp": xml0_timestamp,
-        "first_raw3_timestamp": truncate_to_milliseconds(first_raw3_timestamp),
-        "last_raw3_timestamp": truncate_to_milliseconds(last_raw3_timestamp),
-        "first_datagram_timestamp": first_datagram_timestamp,
-        "last_datagram_timestamp": last_datagram_timestamp,
-        "raw3_count": raw3_count,
+        "xml_dicts": xml_dicts,
+        "timestamps": _finalize_ek80_timestamp_state(ts_state),
+        "gps_data": _finalize_gps_state(gps_state),
+        "metadata_start_time": metadata_start_time,
     }
 
 
@@ -747,23 +840,37 @@ def extract_ek60_file_config(raw_path, reader, metadata=None):
     }
 
 
-def extract_ek80_file_config(raw_path, ek80_xml_dict, metadata=None):
+def extract_ek80_file_config(
+    raw_path,
+    ek80_xml_dict,
+    metadata_start_time=None,
+    timestamps=None,
+    gps_data=None,
+):
     """Extract EK80 file configuration for calibration matching.
     
     Args:
         raw_path: Path to the raw file
         ek80_xml_dict: List of XML roots converted to dictionaries
-        metadata: Optional parsed metadata dict
-    
+        metadata_start_time: Precomputed value for the metadata_start_time
+            field. Left as None when not provided.
+        timestamps: Precomputed RAW3 and datagram timestamps, as returned by
+            extract_ek80_datagram_timestamps. Computed on demand when None so
+            the function still works on its own.
+        gps_data: Precomputed GPS data, as returned by extract_gps_data.
+            Computed on demand when None.
+
     Returns a dict with:
       - filename, metadata_start_time, first_ping_time, last_ping_time
       - raw3_count, multiplexing_found
       - gps_data: first/last GPS coordinates with timestamps
       - channels: list of channel configs with transceiver/transducer identifiers
     """
-    timestamps = extract_ek80_datagram_timestamps(raw_path)
-    gps_data = extract_gps_data(raw_path)
-    
+    if timestamps is None:
+        timestamps = extract_ek80_datagram_timestamps(raw_path)
+    if gps_data is None:
+        gps_data = extract_gps_data(raw_path)
+
     # Build lookup tables from Configuration XML
     transceiver_info = {}
     transducer_info = {}
@@ -826,7 +933,7 @@ def extract_ek80_file_config(raw_path, ek80_xml_dict, metadata=None):
     
     return {
         "filename": Path(raw_path).name,
-        "metadata_start_time": metadata.get("START_TIME") if metadata else None,
+        "metadata_start_time": metadata_start_time,
         "first_ping_time": (
             timestamps["first_raw3_timestamp"].isoformat(timespec="milliseconds")
             if timestamps["first_raw3_timestamp"] else None
@@ -956,59 +1063,92 @@ def _safe_int(value):
         return None
 
 
-def process_raw_folder(raw_input_folder, verbose=True):
-    """Process all .raw files in a folder and return sorted file configurations.
+def _config_sort_key(cfg):
+    """Sort key for file configs: by ``metadata_start_time``, earliest first.
 
-    Discovers every ``*.raw`` file in *raw_input_folder*, auto‑detects the
-    instrument type (EK60 / EK80), extracts channel configurations, GPS data
-    and datagram timestamps, then returns the list **sorted by
-    ``metadata_start_time``** (earliest first).
+    Files whose timestamp is missing or unparseable are placed first (the empty
+    string sorts before valid ISO timestamps).
+    """
+    t = cfg.get("metadata_start_time")
+    if t is None:
+        return ""  # sort missing timestamps first
+    return str(t)
+
+
+def process_raw_file(raw_path, verbose=True, verify_start_time=False):
+    """Scan a single *local* .raw file and return its file configuration.
+
+    This is the per-file unit of :func:`process_raw_folder`, exposed separately
+    so callers can drive the iteration themselves — e.g. downloading one remote
+    file at a time into local scratch. It only ever reads a local path.
 
     Args:
-        raw_input_folder: Path (or str) to the folder containing ``.raw`` files.
-        verbose: If True, print progress information for each file.
+        raw_path: Path to a local ``.raw`` file.
+        verbose: If True, print per-file progress information.
+        verify_start_time: If True, additionally run the full SimradFileReader
+            on an EK80 file to obtain its guarded minimum START_TIME.
 
     Returns:
-        tuple: (file_configs, frequencies_set)
-            - file_configs: list of dicts (one per raw file), sorted by
-              ``metadata_start_time``.
-            - frequencies_set: set of unique frequencies (Hz) found across
-              all channels.
-
-    Raises:
-        FileNotFoundError: If no ``.raw`` files are found in the folder.
+        dict | None: The file configuration, or ``None`` when the instrument
+        type cannot be detected (caller should skip the file).
     """
     # Import here to keep the module-level namespace clean; the reader lives
     # in a sibling sub-package that may not always be available.
     from .simrad_reader.raw_reader import SimradFileReader
 
-    raw_input_folder = Path(raw_input_folder)
-    raw_files = sorted(raw_input_folder.glob("*.raw"))
-
-    if not raw_files:
-        raise FileNotFoundError(f"No .raw files found in: {raw_input_folder}")
+    raw_path = Path(raw_path)
+    instrument = detect_instrument_type(raw_path)
 
     if verbose:
-        print(f"Found {len(raw_files)} raw files in {raw_input_folder}")
-        for f in raw_files:
-            print(f"  - {f.name}")
+        print("=" * 80)
+        print(f"File: {raw_path.name}")
+        print(f"Instrument (detected): {instrument}")
 
-    file_configs = []
-    frequencies_set = set()
+    if instrument == "UNKNOWN":
+        if verbose:
+            print("  WARNING: Could not detect instrument type, skipping file")
+        return None
 
-    for raw_path in raw_files:
-        instrument = detect_instrument_type(raw_path)
+    if instrument == "EK80":
+        # One pass over headers only; RAW3 sample bodies are skipped.
+        scan = scan_ek80_file(raw_path)
+        metadata_start_time = scan["metadata_start_time"]
+
+        if verify_start_time:
+            # Compare against the reader guarded minimum START_TIME.
+            reader = SimradFileReader(instrument)
+            reader.process_file(str(raw_path))
+            reader_metadata = (
+                json.loads(reader.metadata) if reader.metadata else None
+            )
+            reader_start = (
+                reader_metadata.get("START_TIME") if reader_metadata else None
+            )
+            if reader_start and reader_start != metadata_start_time:
+                if verbose:
+                    print(
+                        f"  WARNING: start time mismatch "
+                        f"(scan={metadata_start_time!r}, "
+                        f"reader={reader_start!r}); using reader value"
+                    )
+                metadata_start_time = reader_start
+            if reader.errors and verbose:
+                _pretty_dict("Read errors:", reader.errors)
+
+        file_config = extract_ek80_file_config(
+            raw_path,
+            scan["xml_dicts"],
+            metadata_start_time,
+            timestamps=scan["timestamps"],
+            gps_data=scan["gps_data"],
+        )
+        file_config["file_format"] = "EK80"
+        file_config["instrument"] = instrument
 
         if verbose:
-            print("=" * 80)
-            print(f"File: {raw_path.name}")
-            print(f"Instrument (detected): {instrument}")
+            print("File format: EK80")
 
-        if instrument == "UNKNOWN":
-            if verbose:
-                print("  WARNING: Could not detect instrument type, skipping file")
-            continue
-
+    elif instrument == "EK60":
         reader = SimradFileReader(instrument)
         reader.process_file(str(raw_path))
 
@@ -1022,16 +1162,80 @@ def process_raw_folder(raw_input_folder, verbose=True):
         if reader.errors and verbose:
             _pretty_dict("Read errors:", reader.errors)
 
-        if instrument == "EK80":
-            ek80_dict = read_ek80_xml_as_dict(raw_path)
-            file_config = extract_ek80_file_config(raw_path, ek80_dict, metadata)
-            file_config["file_format"] = reader.file_format
-            file_config["instrument"] = instrument
+        file_config = extract_ek60_file_config(raw_path, reader, metadata)
+        file_config["instrument"] = instrument
+    else:
+        return None
 
-        elif instrument == "EK60":
-            file_config = extract_ek60_file_config(raw_path, reader, metadata)
-            file_config["instrument"] = instrument
-        else:
+    if verbose:
+        gps = file_config.get("gps_data", {})
+        print(f"\n--- GPS Summary ---")
+        print(f"  NMEA datagrams found: {gps.get('nmea_count', 0)}")
+        print(f"  Valid GPS fixes: {gps.get('valid_gps_count', 0)}")
+        if gps.get("first_gps"):
+            fg = gps["first_gps"]
+            print(f"  First GPS: {fg['latitude']:.6f}, {fg['longitude']:.6f}")
+
+    return file_config
+
+
+def process_raw_folder(raw_input_folder, verbose=True, verify_start_time=False,
+                       raw_files=None):
+    """Process all .raw files in a folder and return sorted file configurations.
+
+    Discovers every ``*.raw`` file in *raw_input_folder*, auto‑detects the
+    instrument type (EK60 / EK80), extracts channel configurations, GPS data
+    and datagram timestamps, then returns the list **sorted by
+    ``metadata_start_time``** (earliest first).
+
+    EK80 files are read in a single pass over the datagram headers
+    (scan_ek80_file); the large RAW3 sample payloads are never read.
+    metadata_start_time is taken from the first datagram, which equals the
+    reader START_TIME for files whose datagrams are in chronological order.
+
+    Args:
+        raw_input_folder: Path (or str) to the folder containing ``.raw`` files.
+        verbose: If True, print progress information for each file.
+        verify_start_time: If True, additionally run the full SimradFileReader
+            on each EK80 file to obtain its guarded minimum START_TIME and use
+            that for metadata_start_time, warning on any mismatch. Slower, and
+            only needed when a file may have datagrams out of chronological
+            order. EK60 files always use the reader regardless.
+        raw_files: Optional pre-resolved list of ``.raw`` file paths to process
+            instead of globbing the folder (e.g. a time-window-filtered subset).
+
+    Returns:
+        tuple: (file_configs, frequencies_set)
+            - file_configs: list of dicts (one per raw file), sorted by
+              ``metadata_start_time``.
+            - frequencies_set: set of unique frequencies (Hz) found across
+              all channels.
+
+    Raises:
+        FileNotFoundError: If no ``.raw`` files are found in the folder.
+    """
+    raw_input_folder = Path(raw_input_folder)
+    if raw_files is None:
+        raw_files = sorted(raw_input_folder.glob("*.raw"))
+    else:
+        raw_files = [Path(f) for f in raw_files]
+
+    if not raw_files:
+        raise FileNotFoundError(f"No .raw files found in: {raw_input_folder}")
+
+    if verbose:
+        print(f"Found {len(raw_files)} raw files in {raw_input_folder}")
+        for f in raw_files:
+            print(f"  - {f.name}")
+
+    file_configs = []
+    frequencies_set = set()
+
+    for raw_path in raw_files:
+        file_config = process_raw_file(
+            raw_path, verbose=verbose, verify_start_time=verify_start_time
+        )
+        if file_config is None:
             continue
 
         file_configs.append(file_config)
@@ -1040,25 +1244,7 @@ def process_raw_folder(raw_input_folder, verbose=True):
             if "frequency" in ch:
                 frequencies_set.add(ch["frequency"])
 
-        if verbose:
-            gps = file_config.get("gps_data", {})
-            print(f"\n--- GPS Summary ---")
-            print(f"  NMEA datagrams found: {gps.get('nmea_count', 0)}")
-            print(f"  Valid GPS fixes: {gps.get('valid_gps_count', 0)}")
-            if gps.get("first_gps"):
-                fg = gps["first_gps"]
-                print(f"  First GPS: {fg['latitude']:.6f}, {fg['longitude']:.6f}")
-
-    # Sort by metadata_start_time (earliest first).  Files whose timestamp is
-    # missing or unparseable are placed first (empty string sorts before valid
-    # ISO timestamps).
-    def _sort_key(cfg):
-        t = cfg.get("metadata_start_time")
-        if t is None:
-            return ""  # sort missing timestamps first
-        return str(t)
-
-    file_configs.sort(key=_sort_key)
+    file_configs.sort(key=_config_sort_key)
 
     if verbose:
         print("\n" + "=" * 80)

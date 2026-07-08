@@ -47,6 +47,7 @@ from .mapping_algorithm import (
     check_for_conflicts,
     check_required_calibration_params,
     verify_calibration_file_usage,
+    verify_mapping_covers_raw_files,
     set_record_author,
 )
 
@@ -108,6 +109,7 @@ __all__ = [
     'check_for_conflicts',
     'check_required_calibration_params',
     'verify_calibration_file_usage',
+    'verify_mapping_covers_raw_files',
     'set_record_author',
     'generate_calibration_templates',
     'validate_loaded_templates',

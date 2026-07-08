@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Remote (`gs://`) raw and calibration **input folders** in
+  `generate_standardized_cal_mapping`, detected by URL scheme. Remote raw files
+  are scanned one at a time (each downloaded to local scratch, read for channel
+  config, then the local copy deleted before the next — the deep readers stay
+  strictly local); a remote calibration folder is bulk-localized for the parse.
+  New `gcs` extra (`pip install aa-si-calibration[gcs]`) provides fsspec/gcsfs;
+  new `aa_si_calibration._storage` helper module.
+- `process_raw_file` (single-file public entry point) and `_config_sort_key`,
+  factored out of `process_raw_folder` (which is unchanged for local callers
+  and gained an optional pre-resolved `raw_files` argument).
+- Optional filename-datetime filtering (`file_time_start` / `file_time_end`)
+  on `generate_standardized_cal_mapping`, matching the datetime encoded in each
+  raw file's name; out-of-window remote files are never downloaded.
 - Initial project structure from NOAA Fisheries AA-SI Python template
 
 ### Changed

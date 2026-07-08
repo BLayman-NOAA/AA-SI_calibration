@@ -1201,6 +1201,57 @@ def verify_calibration_file_usage(
     return unused_files
 
 
+def verify_mapping_covers_raw_files(
+    mapping: Dict[str, Any] | str | Path,
+    raw_file_configs: List[Dict[str, Any]] | str | Path,
+) -> bool:
+    """Verify that the channel mapping has one entry per raw file.
+
+    Compares the filenames in the mapping against the raw file configurations.
+    The mapping is expected to contain exactly one entry per raw file, so a
+    mismatch means some raw files are missing from the mapping or the mapping
+    contains files that are not in the raw configurations.
+
+    Args:
+        mapping: Mapping dict keyed by filename, or a path to a
+            channel_mapping.yaml file.
+        raw_file_configs: List of raw file config dicts (each with a
+            'filename'), or a path to a raw_file_configs.yaml file.
+
+    Returns:
+        True when the mapping has exactly one entry per raw file, else False.
+    """
+    if isinstance(mapping, (str, Path)):
+        with open(mapping, 'r') as f:
+            mapping = yaml.safe_load(f) or {}
+    if isinstance(raw_file_configs, (str, Path)):
+        raw_file_configs = load_raw_configs(raw_file_configs)
+
+    raw_filenames = {cfg['filename'] for cfg in raw_file_configs}
+    mapped_filenames = set(mapping.keys())
+
+    missing = sorted(raw_filenames - mapped_filenames)
+    extra = sorted(mapped_filenames - raw_filenames)
+
+    print("Checking channel mapping coverage...")
+    print(f"  Raw files: {len(raw_filenames)}")
+    print(f"  Mapping entries: {len(mapped_filenames)}")
+
+    if missing:
+        print(f"  {len(missing)} raw file(s) missing from the mapping:")
+        for name in missing:
+            print(f"    - {name}")
+    if extra:
+        print(f"  {len(extra)} mapping entry(ies) with no matching raw file:")
+        for name in extra:
+            print(f"    - {name}")
+
+    ok = not missing and not extra
+    if ok:
+        print("  Mapping has one entry per raw file.")
+    return ok
+
+
 def set_record_author(calibration_data: Dict[str, Any], record_author: str) -> None:
     """Set record_author on calibration channels where it is not already set.
 
