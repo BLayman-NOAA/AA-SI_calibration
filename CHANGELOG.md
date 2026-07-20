@@ -33,7 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nothing yet
 
 ### Fixed
-- Nothing yet
+- `file_time_start` / `file_time_end` filtering missed raw files that start
+  before the window but record into it, because only each file's own name
+  stamp (its recording *start*) was compared against the window.
+  `_storage.filter_paths_by_file_time` now keeps a file when its span (own
+  stamp → next file's stamp) overlaps the window; the chronologically last
+  file has no inferred end and still uses the own-stamp rule. Matches the
+  same fix in `aa_si_utils.data_retrieval`.
 
 ### Security
 - Nothing yet

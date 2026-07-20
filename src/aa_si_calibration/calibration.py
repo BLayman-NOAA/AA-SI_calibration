@@ -735,10 +735,13 @@ def generate_standardized_cal_mapping(
             metadata_start_time (slower). Default False uses the fast single
             pass scan.
         file_time_start: Optional inclusive lower bound (ISO string or datetime)
-            on the datetime encoded in each raw file's name
-            (``D{YYYYMMDD}-T{HHMMSS}``), restricting which raw files are scanned.
-            Should match the window used to select files for processing. For a
-            remote folder the filter runs before any file is downloaded.
+            on each raw file's recording span, restricting which raw files are
+            scanned. The span is inferred from the ``D{YYYYMMDD}-T{HHMMSS}``
+            name stamps: a file's own stamp is its start and the next file's
+            stamp is its end, so a file that starts before this bound but
+            records into the window is kept. Should match the window used to
+            select files for processing. For a remote folder the filter runs
+            before any file is downloaded.
         file_time_end: Optional inclusive upper bound; see *file_time_start*.
 
     Returns:

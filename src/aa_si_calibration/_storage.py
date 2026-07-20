@@ -190,17 +190,35 @@ def _path_basename(path: Any) -> str:
     return text.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
 
 
+def _next_stamp_map(stamps: list) -> dict:
+    """Map each stamp to the earliest strictly-later stamp (last maps to None).
+
+    Used to infer a file's end time: a raw file records from its own name
+    stamp until the next file begins.
+    """
+    unique = sorted({s for s in stamps if s is not None})
+    return {
+        stamp: (unique[i + 1] if i + 1 < len(unique) else None)
+        for i, stamp in enumerate(unique)
+    }
+
+
 def filter_paths_by_file_time(
     paths: Any,
     file_time_start: Any = None,
     file_time_end: Any = None,
 ) -> list:
-    """Filter raw-file paths by the datetime encoded in their file names.
+    """Filter raw-file paths by the time span inferred from their file names.
 
     Works on local paths and remote URLs alike: only the final path segment is
     inspected, so nothing is opened or downloaded. Bounds are inclusive and may
-    be ISO strings or ``datetime`` objects. Names without a parseable stamp are
-    excluded whenever a bound is given. No bounds returns *paths* unchanged.
+    be ISO strings or ``datetime`` objects. Each name stamp is the file's
+    recording *start*; its end is inferred from the next file's stamp, and
+    files whose span overlaps the window are kept — so a file that starts
+    before the window but records into it is included. The chronologically
+    last file has no inferred end and is kept only when its own stamp falls
+    inside the window. Names without a parseable stamp are excluded whenever a
+    bound is given. No bounds returns *paths* unchanged.
     """
     if file_time_start is None and file_time_end is None:
         return list(paths)
@@ -208,14 +226,20 @@ def filter_paths_by_file_time(
     start = _coerce_datetime(file_time_start)
     end = _coerce_datetime(file_time_end)
 
-    def _in_window(path: Any) -> bool:
-        stamp = parse_datetime_from_filename(_path_basename(path))
+    paths = list(paths)
+    stamps = [parse_datetime_from_filename(_path_basename(p)) for p in paths]
+    next_stamps = _next_stamp_map(stamps)
+
+    def _keep(stamp: datetime | None) -> bool:
         if stamp is None:
             return False
-        if start and stamp < start:
+        if end is not None and stamp > end:
             return False
-        if end and stamp > end:
-            return False
-        return True
+        if start is None or stamp >= start:
+            return True
+        # stamp < start: keep only when the next file proves the recording
+        # extends into the window.
+        nxt = next_stamps.get(stamp)
+        return nxt is not None and nxt > start
 
-    return [path for path in paths if _in_window(path)]
+    return [path for path, stamp in zip(paths, stamps) if _keep(stamp)]

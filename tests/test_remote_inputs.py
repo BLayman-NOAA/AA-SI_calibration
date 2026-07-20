@@ -107,10 +107,15 @@ def test_parse_and_filter():
     assert _storage.parse_datetime_from_filename(_RAW_A) == datetime(2016, 7, 25, 20, 58, 32)
     paths = [_RAW_A, _RAW_B, _RAW_C]
     assert _storage.filter_paths_by_file_time(paths) == paths
+    # A straddles the window start: it records until B begins (21:05), so it
+    # has in-window data and is kept (overlap semantics).
     assert _storage.filter_paths_by_file_time(
         paths, "2016-07-25T21:00", "2016-07-25T21:05:00"
-    ) == [_RAW_B]
+    ) == [_RAW_A, _RAW_B]
     assert _storage.filter_paths_by_file_time([_RAW_A, "x.raw"], "2016-01-01T00:00", None) == [_RAW_A]
+    # The chronologically last file has no next stamp to infer its end from,
+    # so only its own stamp decides.
+    assert _storage.filter_paths_by_file_time([_RAW_A], "2016-07-25T21:00", None) == []
 
 
 # ---------------------------------------------------------------------------
@@ -184,11 +189,15 @@ def test_process_raw_folder_remote_time_filter_before_download(monkeypatch):
     _patch_process_raw_file(monkeypatch, lambda p: downloaded.append(p.name))
 
     configs, _ = calibration_module._process_raw_folder_remote(
-        "memory://s/raw", verbose=False, file_time_start="2016-07-25T21:00"
+        "memory://s/raw",
+        verbose=False,
+        file_time_start="2016-07-25T21:00",
+        file_time_end="2016-07-25T21:10",
     )
-    # Out-of-window file A was never downloaded / processed.
-    assert downloaded == [_RAW_B, _RAW_C]
-    assert [c["filename"] for c in configs] == [_RAW_B, _RAW_C]
+    # A straddles the window start (records until B begins at 21:05) and is
+    # kept; out-of-window file C was never downloaded / processed.
+    assert downloaded == [_RAW_A, _RAW_B]
+    assert [c["filename"] for c in configs] == [_RAW_A, _RAW_B]
 
 
 # ---------------------------------------------------------------------------
