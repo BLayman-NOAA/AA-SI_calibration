@@ -476,6 +476,15 @@ def _new_gps_state():
     }
 
 
+def _lean_fix(gps_fix):
+    """Position-only view of a fix, dropping the diagnostic ``nmea_sentence``."""
+    return {
+        "latitude": gps_fix["latitude"],
+        "longitude": gps_fix["longitude"],
+        "timestamp": gps_fix["timestamp"],
+    }
+
+
 def _accumulate_nme0(nmea_body, timestamp, state):
     """Update the GPS state dict from a single NME0 datagram body.
 
@@ -486,66 +495,98 @@ def _accumulate_nme0(nmea_body, timestamp, state):
         nmea_body: Raw NME0 datagram payload bytes.
         timestamp: Datagram timestamp, or None if unparseable.
         state: Accumulator dict from _new_gps_state, updated in place.
+
+    Returns:
+        The parsed fix dict (latitude, longitude, timestamp, nmea_sentence) when
+        the datagram held a valid position, else None. extract_gps_data uses the
+        returned fix to build the optional track; scan_ek80_file ignores it.
     """
     state["nmea_count"] += 1
 
     try:
         nmea_string = nmea_body.decode("utf-8", errors="replace").strip("\x00")
     except (UnicodeDecodeError, AttributeError):
-        return
+        return None
 
     type_match = re.search(r'\$?([A-Z]{2}(?:GGA|GLL|RMC|GGK))', nmea_string)
     if type_match:
         state["sentence_types"].add(type_match.group(1))
 
     lat, lon = parse_nmea_latlon(nmea_string)
-    if lat is not None and lon is not None:
-        state["valid_gps_count"] += 1
-        state["last_gps"] = {
-            "latitude": lat,
-            "longitude": lon,
-            "timestamp": timestamp.isoformat() if timestamp else None,
-            "nmea_sentence": (
-                nmea_string[:80] + "..." if len(nmea_string) > 80 else nmea_string
-            ),
-        }
-        if state["first_gps"] is None:
-            state["first_gps"] = state["last_gps"]
+    if lat is None or lon is None:
+        return None
+
+    state["valid_gps_count"] += 1
+    gps_fix = {
+        "latitude": lat,
+        "longitude": lon,
+        "timestamp": timestamp.isoformat() if timestamp else None,
+        "nmea_sentence": (
+            nmea_string[:80] + "..." if len(nmea_string) > 80 else nmea_string
+        ),
+    }
+    state["last_gps"] = gps_fix
+    if state["first_gps"] is None:
+        state["first_gps"] = gps_fix
+    return gps_fix
 
 
-def _finalize_gps_state(state):
-    """Convert a GPS accumulator into the extract_gps_data return dict."""
-    return {
+def _finalize_gps_state(state, track=None):
+    """Convert a GPS accumulator into the extract_gps_data return dict.
+
+    Args:
+        state: The summary accumulator from _new_gps_state.
+        track: Optional list of fixes to attach under a ``track`` key. When
+            None (the default) no ``track`` key is added, so first/last-only
+            callers get the historical 5-key dict unchanged.
+    """
+    result = {
         "first_gps": state["first_gps"],
         "last_gps": state["last_gps"],
         "nmea_count": state["nmea_count"],
         "valid_gps_count": state["valid_gps_count"],
         "sentence_types": list(state["sentence_types"]),
     }
+    if track is not None:
+        result["track"] = track
+    return result
 
 
-def extract_gps_data(raw_path):
-    """Extract first and last GPS coordinates from a raw file's NMEA datagrams.
-    
+def extract_gps_data(raw_path, include_track=True, include_nmea_sentence=False):
+    """Extract GPS coordinates from a raw file's NMEA datagrams.
+
     Works with both EK60 and EK80 files. GPS data is stored in NME0 datagrams
     containing NMEA 0183 sentences (GPGGA, GPGLL, GPRMC, etc.).
-    
+
     Args:
         raw_path: Path to the raw file
-    
+        include_track: If True (the default), also return a ``track`` list
+            containing every valid fix, oldest first. Pass False to get only
+            the first/last summary (used by the calibration pipeline so the
+            emitted config stays compact).
+        include_nmea_sentence: If True, each ``track`` entry also carries the
+            raw ``nmea_sentence`` string; otherwise track entries are the lean
+            ``{latitude, longitude, timestamp}`` subset. Only affects the
+            track; ``first_gps``/``last_gps`` always include ``nmea_sentence``.
+
     Returns:
         dict with:
-          - first_gps: dict with latitude, longitude, timestamp (or None)
-          - last_gps: dict with latitude, longitude, timestamp (or None)
+          - first_gps: dict with latitude, longitude, timestamp, nmea_sentence (or None)
+          - last_gps: dict with latitude, longitude, timestamp, nmea_sentence (or None)
           - nmea_count: total number of NME0 datagrams found
           - valid_gps_count: number of datagrams with valid lat/lon
           - sentence_types: set of NMEA sentence types found
+          - track: only when include_track - list of every valid fix, oldest
+            first. track[0]/track[-1] correspond to first_gps/last_gps.
     """
     state = _new_gps_state()
+    track = [] if include_track else None
     for dg_type, timestamp, body in _iter_datagrams(raw_path, read_types=(b"NME0",)):
         if dg_type == b"NME0":
-            _accumulate_nme0(body, timestamp, state)
-    return _finalize_gps_state(state)
+            gps_fix = _accumulate_nme0(body, timestamp, state)
+            if track is not None and gps_fix is not None:
+                track.append(gps_fix if include_nmea_sentence else _lean_fix(gps_fix))
+    return _finalize_gps_state(state, track)
 
 
 def extract_datagram_timestamps(raw_path):
@@ -745,7 +786,7 @@ def extract_ek60_file_config(raw_path, reader, metadata=None):
       - channels: list of channel configs with transceiver/transducer identifiers
     """
     timestamps = extract_datagram_timestamps(raw_path)
-    gps_data = extract_gps_data(raw_path)
+    gps_data = extract_gps_data(raw_path, include_track=False)
     
     channels = []
     # Track transceiver_number -> set of transceiver_port values for multiplexing detection
@@ -869,7 +910,7 @@ def extract_ek80_file_config(
     if timestamps is None:
         timestamps = extract_ek80_datagram_timestamps(raw_path)
     if gps_data is None:
-        gps_data = extract_gps_data(raw_path)
+        gps_data = extract_gps_data(raw_path, include_track=False)
 
     # Build lookup tables from Configuration XML
     transceiver_info = {}

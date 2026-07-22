@@ -36,7 +36,7 @@ def test_scan_matches_individual_wrappers(raw_path):
     scan = scan_ek80_file(raw_path)
     assert scan["xml_dicts"] == read_ek80_xml_as_dict(raw_path)
     assert scan["timestamps"] == extract_ek80_datagram_timestamps(raw_path)
-    assert scan["gps_data"] == extract_gps_data(raw_path)
+    assert scan["gps_data"] == extract_gps_data(raw_path, include_track=False)
 
 
 @pytest.mark.skipif(not RAW_CAL.exists(), reason="HB2407 example data not available")
