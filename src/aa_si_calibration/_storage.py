@@ -12,7 +12,7 @@ module materializes remote inputs locally for them.
 duplicated from ``aa_si_utils._storage`` with identical names and semantics.
 ``fsspec`` is imported lazily, keeping it an optional dependency
 (``pip install aa-si-calibration[gcs]``); the filename-time filter is pure
-stdlib and works without it.
+stdlib for local paths and works without it.
 """
 
 from __future__ import annotations
@@ -203,22 +203,80 @@ def _next_stamp_map(stamps: list) -> dict:
     }
 
 
+def _boundary_stamp(stamps: list, start: datetime) -> datetime | None:
+    """Stamp of the newest file starting before *start*, or None.
+
+    That file is the only one whose name-based verdict rests on the inferred
+    end time: every earlier file is bounded by another file that still starts
+    before the window, so the heuristic already excludes it.
+    """
+    earlier = [s for s in stamps if s is not None and s < start]
+    return max(earlier) if earlier else None
+
+
+def _verified_keep(
+    path: Any,
+    start: datetime,
+    name_based: bool,
+    storage_options: dict[str, Any] | None,
+    verbose: bool,
+) -> bool:
+    """Byte-accurate keep decision for a file that starts before *start*.
+
+    Falls back to *name_based* when the file's last ping cannot be read, since
+    over-including a file is easier to spot than silently dropping data.
+    """
+    from .raw_file_times import last_ping_time  # noqa: PLC0415
+
+    last_ping = last_ping_time(path, storage_options=storage_options)
+    if last_ping is None:
+        if verbose:
+            print(
+                f"  Could not read last ping from {_path_basename(path)}; "
+                f"keeping the filename-based decision ({name_based})"
+            )
+        return name_based
+    return last_ping >= start
+
+
 def filter_paths_by_file_time(
     paths: Any,
     file_time_start: Any = None,
     file_time_end: Any = None,
+    verify_boundary: bool = True,
+    storage_options: dict[str, Any] | None = None,
+    verbose: bool = True,
 ) -> list:
     """Filter raw-file paths by the time span inferred from their file names.
 
     Works on local paths and remote URLs alike: only the final path segment is
-    inspected, so nothing is opened or downloaded. Bounds are inclusive and may
-    be ISO strings or ``datetime`` objects. Each name stamp is the file's
-    recording *start*; its end is inferred from the next file's stamp, and
-    files whose span overlaps the window are kept — so a file that starts
-    before the window but records into it is included. The chronologically
-    last file has no inferred end and is kept only when its own stamp falls
-    inside the window. Names without a parseable stamp are excluded whenever a
+    inspected. Bounds are inclusive and may be ISO strings or ``datetime``
+    objects. Each name stamp is the file's recording *start*; its end is
+    inferred from the next file's stamp, and files whose span overlaps the
+    window are kept, so a file that starts before the window but records into
+    it is included. Names without a parseable stamp are excluded whenever a
     bound is given. No bounds returns *paths* unchanged.
+
+    That inferred end assumes recording ran continuously from one file to the
+    next, which breaks across a gap between survey legs: the last file before
+    the gap looks like it records for the whole gap. So the one file whose
+    verdict depends on it has its real end read from the file itself, which
+    also settles the chronologically last file, whose end the names cannot
+    bound at all. At most one file per call is opened, and only its datagram
+    headers are read.
+
+    Args:
+        paths: Iterable of path-like values or URL strings.
+        file_time_start: Optional inclusive lower bound.
+        file_time_end: Optional inclusive upper bound.
+        verify_boundary: When True (default), read the boundary file's last
+            ping instead of trusting the inferred end. Set False to keep the
+            filter name-only, e.g. for paths that are not reachable.
+        storage_options: fsspec options used to read a remote boundary file.
+        verbose: Print a note when a boundary file cannot be read.
+
+    Returns:
+        list: The subset of *paths* overlapping the window, order preserved.
     """
     if file_time_start is None and file_time_end is None:
         return list(paths)
@@ -242,4 +300,15 @@ def filter_paths_by_file_time(
         nxt = next_stamps.get(stamp)
         return nxt is not None and nxt > start
 
-    return [path for path, stamp in zip(paths, stamps) if _keep(stamp)]
+    kept = [_keep(stamp) for stamp in stamps]
+
+    if start is not None and verify_boundary:
+        boundary = _boundary_stamp(stamps, start)
+        if boundary is not None:
+            for i, stamp in enumerate(stamps):
+                if stamp == boundary:
+                    kept[i] = _verified_keep(
+                        paths[i], start, kept[i], storage_options, verbose
+                    )
+
+    return [path for path, keep in zip(paths, kept) if keep]

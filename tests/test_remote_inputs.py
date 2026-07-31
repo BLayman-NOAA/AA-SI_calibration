@@ -100,6 +100,10 @@ def test_glob_url_returns_reopenable_urls():
 
 # ---------------------------------------------------------------------------
 # filter_paths_by_file_time (calibration's local copy)
+#
+# Name-based semantics only, on paths that do not exist on disk, so these pass
+# verify_boundary=False wherever a file starts before the window. The
+# byte-accurate boundary check is covered in test_raw_file_times.py.
 # ---------------------------------------------------------------------------
 
 
@@ -110,12 +114,14 @@ def test_parse_and_filter():
     # A straddles the window start: it records until B begins (21:05), so it
     # has in-window data and is kept (overlap semantics).
     assert _storage.filter_paths_by_file_time(
-        paths, "2016-07-25T21:00", "2016-07-25T21:05:00"
+        paths, "2016-07-25T21:00", "2016-07-25T21:05:00", verify_boundary=False
     ) == [_RAW_A, _RAW_B]
     assert _storage.filter_paths_by_file_time([_RAW_A, "x.raw"], "2016-01-01T00:00", None) == [_RAW_A]
     # The chronologically last file has no next stamp to infer its end from,
     # so only its own stamp decides.
-    assert _storage.filter_paths_by_file_time([_RAW_A], "2016-07-25T21:00", None) == []
+    assert _storage.filter_paths_by_file_time(
+        [_RAW_A], "2016-07-25T21:00", None, verify_boundary=False
+    ) == []
 
 
 # ---------------------------------------------------------------------------

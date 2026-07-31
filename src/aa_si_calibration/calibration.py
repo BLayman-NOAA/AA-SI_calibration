@@ -241,7 +241,7 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
 
 
 def extract_standardized_calibration_parameters(
-    calibration_dict, mapping_dict, filename=None, echodata=None,
+    calibration_dict, mapping_dict, filename=None, echodata=None, raw_file_path=None,
 ):
     """Extract standardized calibration parameters in the comparison format.
 
@@ -263,10 +263,17 @@ def extract_standardized_calibration_parameters(
         echodata: Optional EchoData object.  If provided, channel ordering
             is taken from ``echodata["Sonar/Beam_group1"].channel.values``
             to guarantee alignment with echopype arrays.
+        raw_file_path: Optional full or relative path to a raw file; its
+            basename is used as *filename* when *filename* is not given
+            directly. Convenience for callers (e.g. a per-file recipe step)
+            that only have the raw file's path, not its bare name as it
+            appears in *mapping_dict*.
 
     Returns:
         dict with keys ``cal_params``, ``env_params``, ``other_params``.
     """
+    if filename is None and raw_file_path is not None:
+        filename = Path(raw_file_path).name
     if filename is None:
         filename = next(iter(mapping_dict))
 
@@ -609,9 +616,11 @@ def _process_raw_folder_remote(
 
     Mirrors :func:`process_raw_folder`'s contract, but downloads each file to a
     private local scratch dir, scans it, and deletes the local copy before the
-    next file is fetched — so local disk only ever holds one raw file. The
+    next file is fetched, so local disk only ever holds one raw file. The
     filename-time filter is applied to the listing, so excluded files are never
-    downloaded. Bucket objects are never modified or removed.
+    downloaded (the one file straddling the window's start has its trailing
+    headers range-read to place it). Bucket objects are never modified or
+    removed.
 
     Returns:
         tuple: ``(file_configs, frequencies_set)``, sorted identically to
@@ -626,7 +635,11 @@ def _process_raw_folder_remote(
     if file_time_start is not None or file_time_end is not None:
         before = len(raw_urls)
         raw_urls = _storage.filter_paths_by_file_time(
-            raw_urls, file_time_start, file_time_end
+            raw_urls,
+            file_time_start,
+            file_time_end,
+            storage_options=storage_options,
+            verbose=verbose,
         )
         if verbose:
             print(
@@ -853,12 +866,16 @@ def generate_standardized_cal_mapping(
                 file_time_end=file_time_end,
             )
         else:
-            # Filter the glob result up front so excluded files are never read.
+            # Filter the glob result up front so excluded files are never read
+            # in full (the boundary file's headers are read to place it).
             local_raw_files = sorted(raw_input_folder.glob("*.raw"))
             if file_time_start is not None or file_time_end is not None:
                 before = len(local_raw_files)
                 local_raw_files = _storage.filter_paths_by_file_time(
-                    local_raw_files, file_time_start, file_time_end
+                    local_raw_files,
+                    file_time_start,
+                    file_time_end,
+                    verbose=verbose,
                 )
                 if verbose:
                     print(

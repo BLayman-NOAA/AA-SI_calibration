@@ -33,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nothing yet
 
 ### Fixed
+- Filename-time filtering pulled in a stale raw file from before a gap between
+  survey legs. Inferring a file's end from the next file's start stamp assumes
+  recording ran continuously, so the last file before a gap looked like it
+  recorded for the whole gap and was kept as if it straddled the window start.
+  `_storage.filter_paths_by_file_time` now reads the real last ping from the one
+  file whose verdict depends on that inference, via the new `raw_file_times`
+  module (stdlib-only, deliberately mirrored from `aa_si_utils.raw_file_times`
+  rather than shared, per this package's no-dependency-on-`aa_si_utils` rule).
+  This also settles the chronologically last file, whose end the names cannot
+  bound at all. At most one file per call is opened and only its datagram
+  headers are read; for remote folders that is a couple of range requests, not
+  a download. Pass `verify_boundary=False` to keep the filter name-only.
 - `file_time_start` / `file_time_end` filtering missed raw files that start
   before the window but record into it, because only each file's own name
   stamp (its recording *start*) was compared against the window.
