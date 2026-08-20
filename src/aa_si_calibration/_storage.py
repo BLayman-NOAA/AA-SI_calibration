@@ -18,6 +18,7 @@ stdlib for local paths and works without it.
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import os
 import re
 import shutil
@@ -87,6 +88,44 @@ def glob_url(
     fs = get_fs(base, storage_options)
     matches = fs.glob(str(base).rstrip("/") + "/" + pattern)
     return sorted(fs.unstrip_protocol(match) for match in matches)
+
+
+def folder_fingerprint(
+    folder: Any,
+    pattern: str = "*.raw",
+    storage_options: dict[str, Any] | None = None,
+) -> list[list]:
+    """Sorted ``[name, size]`` pairs for every *pattern* match under *folder*.
+
+    Identifies a folder's contents without reading any of it: one directory
+    listing locally, one ``ls`` call on a bucket. The folder's own location is
+    excluded, so a local copy and the ``gs://`` original it was copied from
+    fingerprint identically.
+
+    Args:
+        folder: Local path or remote fsspec URL to list.
+        pattern: Glob pattern matched against each entry's basename.
+        storage_options: fsspec options for a remote *folder*.
+
+    Returns:
+        List of ``[basename, size_in_bytes]`` pairs, sorted by basename.
+    """
+    if is_remote(folder):
+        fs = get_fs(folder, storage_options)
+        entries = fs.ls(str(folder).rstrip("/"), detail=True)
+        found = [
+            [_path_basename(entry["name"]), int(entry.get("size") or 0)]
+            for entry in entries
+            if entry.get("type") != "directory"
+            and fnmatch.fnmatch(_path_basename(entry["name"]), pattern)
+        ]
+    else:
+        found = [
+            [path.name, path.stat().st_size]
+            for path in Path(folder).glob(pattern)
+            if path.is_file()
+        ]
+    return sorted(found)
 
 
 def _rmtree_local(path: Path) -> None:

@@ -3,6 +3,8 @@ Geometry utility functions.
 
 """
 import math
+
+import numpy as np
 from rdp import rdp
 
 PI = math.pi
@@ -390,5 +392,29 @@ def rdp_line_simplify(good_positions, epsilon=0.004):  #default was 0.5
     Returns:
         simplified line
     """
-    return rdp(good_positions, epsilon=epsilon)
+    return rdp(good_positions, epsilon=epsilon, dist=planar_point_line_distance)
+
+
+def planar_point_line_distance(point, start, end):
+    """
+    Perpendicular distance from a point to the line through start and end.
+
+    Used in place of rdp.pldist, which takes the 2D cross product with
+    numpy.cross and so requires vectors of length three.
+
+    Args:
+        point (array): Point to measure from, as [lon, lat].
+        start (array): First point on the line, as [lon, lat].
+        end (array): Second point on the line, as [lon, lat].
+
+    Returns:
+        float: Distance from the point to the line.
+    """
+    if np.all(np.equal(start, end)):
+        return np.linalg.norm(np.subtract(point, start))
+
+    line = np.subtract(end, start)
+    offset = np.subtract(start, point)
+    cross = line[0] * offset[1] - line[1] * offset[0]
+    return np.abs(cross) / np.linalg.norm(line)
 

@@ -604,6 +604,64 @@ def print_calibration_values(echodata, params, title="Calibration Values"):
 
 
 
+#: Bumped when the fingerprint's shape or the scan's output format changes, so
+#: sidecars written by an older version are treated as stale rather than
+#: silently trusted.
+_RAW_SCAN_FINGERPRINT_VERSION = 1
+
+#: Sidecar recording which raw files (and which window) the saved
+#: raw_file_configs.yaml was scanned from.
+_RAW_SCAN_FINGERPRINT_NAME = "raw_file_configs.fingerprint.json"
+
+
+def _raw_scan_fingerprint(
+    raw_input_folder, storage_options, file_time_start, file_time_end,
+):
+    """Identity of a raw scan's inputs: folder contents plus the time window.
+
+    Folder contents are listed, never read, so this is one directory listing
+    locally and one ``ls`` on a bucket. Any file added to or removed from the
+    folder changes the result, including files outside the window: the listing
+    is deliberately taken before the window is applied, which keeps this cheap
+    at the cost of an occasional unnecessary re-scan.
+    """
+    return {
+        "version": _RAW_SCAN_FINGERPRINT_VERSION,
+        "raw_files": _storage.folder_fingerprint(
+            raw_input_folder, "*.raw", storage_options,
+        ),
+        "file_time_start": None if file_time_start is None else str(file_time_start),
+        "file_time_end": None if file_time_end is None else str(file_time_end),
+    }
+
+
+def _read_raw_scan_fingerprint(path):
+    """Return the fingerprint recorded at *path*, or None if unreadable.
+
+    A missing, truncated or hand-edited sidecar is treated as "unknown", which
+    forces a re-scan rather than trusting configs of unknown provenance.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _frequencies_from_configs(file_configs):
+    """Unique channel frequencies (Hz) across saved raw file configurations.
+
+    Recovers the second half of :func:`process_raw_folder`'s return value from
+    the configs on disk, so Step 2 can run against a reused Step 1.
+    """
+    return {
+        channel["frequency"]
+        for config in file_configs
+        for channel in config.get("channels", [])
+        if "frequency" in channel
+    }
+
+
 def _process_raw_folder_remote(
     raw_url,
     storage_options=None,
@@ -711,6 +769,23 @@ def generate_standardized_cal_mapping(
          handle unused files, resolve conflicts, and save mapping files.
       4. Verify that all required calibration parameters are present and that
          every remaining single-channel file is referenced by the mapping.
+
+    Steps 1 and 2 are skipped independently when their outputs are already
+    current under *output_base*, so re-running is cheap:
+
+      * Step 1 is reused only when the saved ``raw_file_configs.yaml`` was
+        scanned from the same raw files and the same time window being asked
+        for now, recorded in a ``raw_file_configs.fingerprint.json`` sidecar.
+        Point *raw_input_folder* somewhere else, or move the window, and the
+        scan re-runs. This is the expensive step on a ``gs://`` folder.
+      * Step 2 is reused whenever *output_base* already holds any
+        single-channel file. That is what makes the ``"error"`` conflict
+        workflow work: delete the unwanted file, re-run, and the rest survive.
+        To force a full re-parse, empty
+        ``single_channel_calibration_files/``.
+
+    Steps 3 and 4 always run, so the mapping files always reflect the current
+    raw configs and single-channel files.
 
     Args:
         raw_input_folder: Path to folder containing .raw files. May be a remote
@@ -836,25 +911,36 @@ def generate_standardized_cal_mapping(
         unused_cal_output.mkdir(parents=True, exist_ok=True)
 
     raw_configs_path = raw_configs_output / "raw_file_configs.yaml"
+    raw_scan_fingerprint_path = raw_configs_output / _RAW_SCAN_FINGERPRINT_NAME
 
-    # If single-channel calibration files already exist, skip Steps 1-2.
-    # This allows the "error" conflict-resolution workflow: after a conflict
-    # is raised, the user deletes the unwanted file(s) and re-runs the cell
-    # without Steps 1-2 regenerating them.
-    existing_cal_files = (
-        list(single_cal_output.glob("*.yaml")) + list(single_cal_output.glob("*.yml"))
+    input_options = (
+        _storage.execution_storage_options()
+        if (raw_input_remote or cal_input_remote)
+        else None
     )
-    if existing_cal_files:
-        if verbose:
-            print(f"Found {len(existing_cal_files)} existing single-channel calibration "
-                  f"file(s) in {single_cal_output}, skipping Steps 1-2.")
-    else:
-        input_options = (
-            _storage.execution_storage_options()
-            if (raw_input_remote or cal_input_remote)
-            else None
-        )
 
+    # Steps 1 and 2 are cached independently, because they answer to different
+    # inputs: Step 1 to the raw folder and the window, Step 2 to the
+    # manufacturer calibration folder. Gating both on the single-channel files
+    # (as this once did) let a changed raw folder or window go unnoticed, and
+    # Step 3 would then map a stale file list without saying so.
+    scan_fingerprint = _raw_scan_fingerprint(
+        raw_input_folder, input_options, file_time_start, file_time_end,
+    )
+    reuse_raw_configs = (
+        raw_configs_path.exists()
+        and _read_raw_scan_fingerprint(raw_scan_fingerprint_path) == scan_fingerprint
+    )
+
+    # Carried from Step 1 to Step 2 when both run; recovered from the saved
+    # configs when only Step 2 does.
+    frequencies_set = None
+
+    if reuse_raw_configs:
+        if verbose:
+            print(f"Raw file configurations match the requested raw files and "
+                  f"window, skipping Step 1: {raw_configs_path}")
+    else:
         # Step 1: Read raw file configurations
         if raw_input_remote:
             file_configs, frequencies_set = _process_raw_folder_remote(
@@ -900,8 +986,29 @@ def generate_standardized_cal_mapping(
                 raw_files=raw_files_arg,
             )
         save_yaml(file_configs, raw_configs_path)
+        # Written after the configs so a crash mid-scan leaves no fingerprint
+        # claiming the incomplete file is current.
+        with open(raw_scan_fingerprint_path, "w", encoding="utf-8") as f:
+            json.dump(scan_fingerprint, f, indent=2)
         if verbose:
             print(f"\nSaved raw file configurations to: {raw_configs_path}")
+
+    # If single-channel calibration files already exist, skip Step 2. This
+    # allows the "error" conflict-resolution workflow: after a conflict is
+    # raised, the user deletes the unwanted file(s) and re-runs the cell
+    # without Step 2 regenerating them.
+    existing_cal_files = (
+        list(single_cal_output.glob("*.yaml")) + list(single_cal_output.glob("*.yml"))
+    )
+    if existing_cal_files:
+        if verbose:
+            print(f"Found {len(existing_cal_files)} existing single-channel calibration "
+                  f"file(s) in {single_cal_output}, skipping Step 2.")
+    else:
+        if frequencies_set is None:
+            frequencies_set = _frequencies_from_configs(
+                load_raw_configs(raw_configs_path)
+            )
 
         # Step 2: Parse manufacturer calibration files. The parsers are strictly
         # local-filesystem code, so a remote cal folder is materialized locally
