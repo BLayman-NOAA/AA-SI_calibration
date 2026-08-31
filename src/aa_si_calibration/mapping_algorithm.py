@@ -23,6 +23,7 @@ DEFAULT_TOLERANCES = {
 }
 
 from .standardized_file_lib import ensure_string_identifiers as _ensure_string_identifiers
+from . import _console
 
 from .standardized_file_lib import (
     build_calibration_key,
@@ -996,28 +997,42 @@ def resolve_conflicts_interactive(
         unique_channel_ids = sorted(set(mm.channel_id for mm in channels))
         options = list(cal_keys)
 
-        print("-" * 60)
-        print(f"CONFLICT {conflict_num} of {len(groups)}")
-        print("-" * 60)
-        print("Affected raw channel(s):")
-        for cid in unique_channel_ids:
-            print(f"  - {cid}")
-        print("\nCalibration file options:")
+        # Built as text so it can go to both places: printed for the run log,
+        # and handed to the prompt, which repeats it on the terminal. Inside a
+        # recipe step an ordinary print never reaches the user.
+        lines = [
+            "-" * 60,
+            f"CONFLICT {conflict_num} of {len(groups)}",
+            "-" * 60,
+            "Affected raw channel(s):",
+        ]
+        lines.extend(f"  - {cid}" for cid in unique_channel_ids)
+        lines.append("")
+        lines.append("Calibration file options:")
         for i, cal_key in enumerate(options, start=1):
             cal_data = result.calibration_dict.get(cal_key, {})
             cal_date = cal_data.get('calibration_date', 'unknown')
             src_files = cal_data.get('source_filenames', ['unknown'])
-            print(f"  [{i}] {cal_key}.yaml")
-            print(f"      calibration_date: {cal_date}  |  source: {src_files}")
+            lines.append(f"  [{i}] {cal_key}.yaml")
+            lines.append(f"      calibration_date: {cal_date}  |  source: {src_files}")
+        option_block = "\n".join(lines)
+        print(option_block)
 
+        context = option_block
         while True:
-            choice = input(
-                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP (1-{len(options)}): "
+            choice = _console.prompt(
+                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP (1-{len(options)}): ",
+                context=context,
             ).strip()
             if choice.isdigit() and 1 <= int(choice) <= len(options):
                 break
-            print(f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND {len(options)}.")
+            invalid = f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND {len(options)}."
+            print(invalid)
+            # The options are already on screen; repeat only the correction.
+            context = invalid
 
+        # The typed answer is not echoed into the log, so record it.
+        print(f"  Selected: {choice}")
         keep_idx = int(choice) - 1
         kept_key = options[keep_idx]
         rejected_keys = [k for k in options if k != kept_key]

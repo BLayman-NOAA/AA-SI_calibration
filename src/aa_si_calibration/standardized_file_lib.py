@@ -888,7 +888,7 @@ def save_single_channel_files(
     # Warn about duplicates
     dup_bases = [k for k, v in base_key_groups.items() if len(v) > 1]
     if dup_bases:
-        print(f"\n⚠️  WARNING: {len(dup_bases)} calibration key(s) appeared "
+        print(f"\n WARNING: {len(dup_bases)} calibration key(s) appeared "
               f"more than once (same configuration from multiple source files).")
         print("   Disambiguation suffixes (__1, __2, …) have been appended.")
         for base_key in dup_bases:

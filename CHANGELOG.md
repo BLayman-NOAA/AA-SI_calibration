@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The pipeline is callable as separate steps: `read_raw_file_config` (one raw
+  file), `record_raw_file_configs` (sort and save the survey's configurations),
+  `standardize_calibration_files`, and `build_calibration_mapping`.
+  `generate_standardized_cal_mapping` is unchanged and is now a thin sequence
+  over them. Splitting them lets a caller cache, resume, or re-run each stage
+  on its own.
+- `standardization.fingerprint.json`, recording which manufacturer files
+  produced the single-channel files. Step 2 previously skipped whenever the
+  output directory was non-empty, so a parse interrupted part way through left
+  a partial set that the next run treated as complete. The sidecar is written
+  only after every channel file lands. It answers to the manufacturer folder,
+  so deleting a single-channel file still does not bring it back, which the
+  `conflict_resolution="error"` workflow depends on; emptying the folder
+  re-parses.
+- `conflict_resolution="interactive"` now works inside a recipe step. The
+  conflict options go to the terminal rather than only the captured run log,
+  and a run with no interactive input fails before any calibration file is
+  moved. Standalone and notebook callers are unaffected: with no recipe step in
+  play the prompt is the builtin `input()`.
+
 - Remote (`gs://`) raw and calibration **input folders** in
   `generate_standardized_cal_mapping`, detected by URL scheme. Remote raw files
   are scanned one at a time (each downloaded to local scratch, read for channel

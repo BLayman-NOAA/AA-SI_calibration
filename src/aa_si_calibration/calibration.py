@@ -15,6 +15,8 @@ import re
 
 from aa_si_calibration.utils import CalibrationFlags
 
+from aa_si_calibration import _artifacts
+from aa_si_calibration import _console
 from aa_si_calibration import _storage
 from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
 from aa_si_calibration import manufacturer_file_parsers
@@ -635,17 +637,130 @@ def _raw_scan_fingerprint(
     }
 
 
-def _read_raw_scan_fingerprint(path):
+#: Bumped when the fingerprint's shape or the standardized format changes.
+_STANDARDIZATION_FINGERPRINT_VERSION = 1
+
+#: Sidecar recording which manufacturer files the single-channel files were
+#: parsed from. Kept beside the single-channel folder rather than inside it, so
+#: the ``*.yaml`` globs that read that folder do not have to skip it.
+_STANDARDIZATION_FINGERPRINT_NAME = "standardization.fingerprint.json"
+
+
+def _standardization_fingerprint(cal_input_folder, storage_options, short_filenames):
+    """Identity of a standardization's inputs.
+
+    One directory listing locally, one ``ls`` on a bucket; the files are never
+    read. ``short_filenames`` participates because it sets the names the
+    single-channel files are written under, which are the mapping's keys.
+    """
+    return {
+        "version": _STANDARDIZATION_FINGERPRINT_VERSION,
+        "cal_files": sorted(
+            _storage.folder_fingerprint(cal_input_folder, "*.cal", storage_options)
+            + _storage.folder_fingerprint(cal_input_folder, "*.xml", storage_options)
+        ),
+        "short_filenames": bool(short_filenames),
+    }
+
+
+def _read_fingerprint_sidecar(path):
     """Return the fingerprint recorded at *path*, or None if unreadable.
 
-    A missing, truncated or hand-edited sidecar is treated as "unknown", which
-    forces a re-scan rather than trusting configs of unknown provenance.
+    An unreadable sidecar means the work is redone rather than trusting
+    outputs of unknown provenance.
     """
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+def _write_fingerprint_sidecar(path, fingerprint):
+    """Record *fingerprint* at *path*.
+
+    Called after the outputs it describes are on disk, so an interrupted run
+    leaves no sidecar claiming incomplete outputs are current.
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(fingerprint, f, indent=2)
+
+
+def _calibration_dirs(output_base, *, keep_unused=False):
+    """Create and return the calibration output subdirectories.
+
+    ``unused_calibration_files`` is created only when *keep_unused*; the rest
+    always are. Idempotent, so every step may call it.
+    """
+    output_base = Path(output_base)
+    dirs = {
+        "raw_configs": output_base / "raw_file_configs",
+        "single_cal": output_base / "single_channel_calibration_files",
+        "mapping": output_base / "mapping_files",
+        "unused_cal": output_base / "unused_calibration_files",
+        "logs": output_base / "logs",
+    }
+    for key in ("raw_configs", "single_cal", "mapping", "logs"):
+        dirs[key].mkdir(parents=True, exist_ok=True)
+    if keep_unused:
+        dirs["unused_cal"].mkdir(parents=True, exist_ok=True)
+    return dirs
+
+
+def _resolve_global_params(cruise_id, record_author, global_params, caller):
+    """Reconcile the explicit metadata arguments with the legacy dict form.
+
+    Returns:
+        dict with ``cruise_id`` and ``record_author``.
+
+    Raises:
+        ValueError: If the two forms disagree, or either value is missing.
+        TypeError: If *global_params* is not a dict.
+    """
+    if global_params is not None and not isinstance(global_params, dict):
+        raise TypeError("global_params must be a dict when provided")
+
+    legacy_params = dict(global_params or {})
+    resolved_cruise_id = cruise_id if cruise_id is not None else legacy_params.get("cruise_id")
+    resolved_record_author = (
+        record_author if record_author is not None else legacy_params.get("record_author")
+    )
+
+    if cruise_id is not None and "cruise_id" in legacy_params and legacy_params["cruise_id"] != cruise_id:
+        raise ValueError(
+            "cruise_id does not match global_params['cruise_id']: "
+            f"{cruise_id!r} != {legacy_params['cruise_id']!r}"
+        )
+
+    if (
+        record_author is not None
+        and "record_author" in legacy_params
+        and legacy_params["record_author"] != record_author
+    ):
+        raise ValueError(
+            "record_author does not match global_params['record_author']: "
+            f"{record_author!r} != {legacy_params['record_author']!r}"
+        )
+
+    missing_global_keys = [
+        key
+        for key, value in {
+            "cruise_id": resolved_cruise_id,
+            "record_author": resolved_record_author,
+        }.items()
+        if value is None
+    ]
+    if missing_global_keys:
+        missing_keys_str = ", ".join(missing_global_keys)
+        raise ValueError(
+            f"{caller} requires values for "
+            f"{missing_keys_str}. Provide them explicitly or via global_params."
+        )
+
+    return {
+        "cruise_id": resolved_cruise_id,
+        "record_author": resolved_record_author,
+    }
 
 
 def _frequencies_from_configs(file_configs):
@@ -743,6 +858,492 @@ def _process_raw_folder_remote(
     return file_configs, frequencies_set
 
 
+def read_raw_file_config(raw_file_path, verify_start_time=False, verbose=True):
+    """Read one raw file's channel configuration.
+
+    The single-file half of :func:`process_raw_folder`. A remote file is
+    downloaded to local scratch, scanned, and the local copy deleted before
+    this returns. Bucket objects are never modified.
+
+    Args:
+        raw_file_path: Path to a .raw file. May be a remote fsspec URL, which
+            requires ``pip install aa-si-calibration[gcs]``.
+        verify_start_time: If True, EK80 files are additionally read with the
+            full SimradFileReader to verify metadata_start_time (slower).
+        verbose: If True, print progress information.
+
+    Returns:
+        dict: The file's configuration, or None when it could not be read.
+        Callers accumulating these should drop the None entries.
+    """
+    from .raw_reader_api import _clean_value, _ensure_string_identifiers, process_raw_file
+
+    if not _storage.is_remote(raw_file_path):
+        config = process_raw_file(
+            Path(raw_file_path), verbose=verbose, verify_start_time=verify_start_time
+        )
+    else:
+        storage_options = _storage.execution_storage_options()
+        with _storage.localized_file(
+            str(raw_file_path), storage_options=storage_options
+        ) as local_raw:
+            config = process_raw_file(
+                local_raw, verbose=verbose, verify_start_time=verify_start_time
+            )
+
+    if config is None:
+        return None
+    # The normalization save_yaml applies before writing, done here so the
+    # returned config is JSON-safe: a recipe checkpoints it per file, and a
+    # value that is not JSON-safe falls back to pickle.
+    return _ensure_string_identifiers(_clean_value(config))
+
+
+def record_raw_file_configs(file_configs, output_base, verbose=True):
+    """Save a set of raw file configurations as the survey's raw config file.
+
+    The fan-in half of the raw scan. Drops the files that could not be read,
+    sorts the rest into the order :func:`process_raw_folder` returns, and
+    writes ``raw_file_configs/raw_file_configs.yaml`` under *output_base*.
+
+    Args:
+        file_configs: Per-file configuration dicts. None entries are dropped.
+        output_base: Root directory the calibration artifacts are written under.
+        verbose: If True, print progress information.
+
+    Returns:
+        dict with keys:
+            - raw_file_configs: The sorted configurations that were saved.
+            - frequencies: Sorted unique channel frequencies (Hz), which
+              standardize_calibration_files uses to order EK60 data.
+            - raw_configs_path: Full path of the file that was written.
+
+    Raises:
+        ValueError: If no readable configurations were supplied.
+    """
+    from .raw_reader_api import _config_sort_key
+
+    dirs = _calibration_dirs(output_base)
+    raw_configs_path = dirs["raw_configs"] / "raw_file_configs.yaml"
+
+    configs = [config for config in file_configs if config is not None]
+    if not configs:
+        raise ValueError(
+            "No raw file configurations to record: every scanned file was "
+            "unreadable, or none were supplied."
+        )
+    configs.sort(key=_config_sort_key)
+
+    frequencies = sorted(_frequencies_from_configs(configs))
+
+    save_yaml(configs, raw_configs_path)
+    _artifacts.record_artifact(raw_configs_path)
+
+    if verbose:
+        print("\n" + "=" * 80)
+        print(f"SUMMARY: Recorded {len(configs)} raw file configuration(s)")
+        print(f"Unique frequencies found: {frequencies} Hz")
+        print("=" * 80)
+        print(f"Saved raw file configurations to: {raw_configs_path}")
+
+    return {
+        "raw_file_configs": configs,
+        "frequencies": frequencies,
+        "raw_configs_path": str(raw_configs_path),
+    }
+
+
+def standardize_calibration_files(
+    cal_input_folder,
+    output_base,
+    frequencies=None,
+    cruise_id=None,
+    record_author=None,
+    global_params=None,
+    short_filenames=True,
+    overwrite=False,
+    verbose=True,
+):
+    """Convert manufacturer calibration files to standardized single-channel files.
+
+    Parses the EK60 ``.cal`` or EK80 ``.xml`` files in *cal_input_folder*,
+    validates them against the standardized schema, and writes one
+    ``.yaml`` per channel into ``single_channel_calibration_files/`` under
+    *output_base*.
+
+    The parse is skipped when ``standardization.fingerprint.json`` shows the
+    same manufacturer files already produced the files that are there. That
+    sidecar answers to the manufacturer folder, so deleting a single-channel
+    file does not bring it back, which is what the
+    ``conflict_resolution="error"`` workflow relies on. It is written only
+    after every channel file lands, so an interrupted parse redoes itself.
+    Emptying the folder re-parses, as does *overwrite*.
+
+    Args:
+        cal_input_folder: Folder of manufacturer calibration files (.cal for
+            EK60, .xml for EK80). May be a remote fsspec URL, which is
+            downloaded to local scratch for the duration of the parse.
+        output_base: Root directory the calibration artifacts are written under.
+        frequencies: Channel frequencies (Hz) ordering EK60 calibration data,
+            normally from :func:`record_raw_file_configs`. Recovered from the
+            saved raw_file_configs.yaml when omitted; optional for EK80.
+        cruise_id: Cruise identifier recorded in every generated file.
+        record_author: Name recorded as the author of every generated file.
+        global_params: Legacy dict form of *cruise_id* and *record_author*.
+        short_filenames: If True, use compact single-channel filenames.
+        overwrite: If True, re-parse even when the sidecar says the existing
+            files are current.
+        verbose: If True, print progress information.
+
+    Returns:
+        dict with keys:
+            - single_channel_dir: Path to the single-channel output folder.
+            - channel_count: Number of single-channel files now in that folder.
+            - skipped: True when the existing files were reused.
+    """
+    cal_input_remote = _storage.is_remote(cal_input_folder)
+    if not cal_input_remote:
+        cal_input_folder = Path(cal_input_folder)
+
+    resolved_global_params = _resolve_global_params(
+        cruise_id, record_author, global_params, "standardize_calibration_files"
+    )
+
+    dirs = _calibration_dirs(output_base)
+    single_cal_output = dirs["single_cal"]
+    logs_output = dirs["logs"]
+    fingerprint_path = Path(output_base) / _STANDARDIZATION_FINGERPRINT_NAME
+
+    input_options = _storage.execution_storage_options() if cal_input_remote else None
+    fingerprint = _standardization_fingerprint(
+        cal_input_folder, input_options, short_filenames
+    )
+
+    existing_cal_files = (
+        list(single_cal_output.glob("*.yaml")) + list(single_cal_output.glob("*.yml"))
+    )
+    if (
+        not overwrite
+        and existing_cal_files
+        and _read_fingerprint_sidecar(fingerprint_path) == fingerprint
+    ):
+        if verbose:
+            print(
+                f"Found {len(existing_cal_files)} single-channel calibration file(s) "
+                f"already standardized from these manufacturer files in "
+                f"{single_cal_output}, skipping the parse."
+            )
+        _artifacts.record_artifact(single_cal_output)
+        return {
+            "single_channel_dir": str(single_cal_output),
+            "channel_count": len(existing_cal_files),
+            "skipped": True,
+        }
+
+    if frequencies is None:
+        frequencies = _frequencies_from_configs(
+            load_raw_configs(dirs["raw_configs"] / "raw_file_configs.yaml")
+        )
+
+    # The parsers are strictly local-filesystem code, so a remote cal folder is
+    # materialized locally for the duration of the parse (these files are small).
+    if cal_input_remote:
+        with _storage.localized_folder(
+            str(cal_input_folder),
+            ("*.cal", "*.xml"),
+            input_options,
+        ) as local_cal_folder:
+            cal_params, env_params, other_params, cal_file_type = \
+                manufacturer_file_parsers.extract_and_convert_calibration_params(
+                    local_cal_folder,
+                    nc_frequencies=frequencies,
+                    output_logs_folder=logs_output,
+                )
+    else:
+        cal_params, env_params, other_params, cal_file_type = \
+            manufacturer_file_parsers.extract_and_convert_calibration_params(
+                cal_input_folder,
+                nc_frequencies=frequencies,
+                output_logs_folder=logs_output,
+            )
+
+    if verbose:
+        print(f"\nParsed {cal_file_type} calibration parameters:")
+        print(f"Channels: {other_params.get('channel')}")
+        print(f"Frequencies: {other_params.get('frequency_nominal')}")
+        print(f"Gain corrections: {cal_params.get('gain_correction')}")
+        print(f"Sa corrections: {cal_params.get('sa_correction')}")
+        print(f"Equivalent beam angles: {cal_params.get('equivalent_beam_angle')}")
+
+    saved_count, _, _standardized_dict = standardized_file_lib.save_single_channel_files_from_params(
+        cal_params,
+        env_params,
+        other_params,
+        resolved_global_params,
+        output_dir=single_cal_output,
+        short_filenames=short_filenames,
+    )
+
+    # Written after the channel files, so an interrupted parse leaves no
+    # sidecar claiming the partial set is current.
+    _write_fingerprint_sidecar(fingerprint_path, fingerprint)
+    _artifacts.record_artifact(single_cal_output)
+
+    if verbose:
+        print(f"\nSaved {saved_count} single-channel calibration file(s) to: {single_cal_output}")
+        print("\nSingle-channel calibration files:")
+        for f in sorted(single_cal_output.glob("*.yaml")):
+            size_kb = f.stat().st_size / 1024
+            print(f"  {f.name} ({size_kb:.1f} KB)")
+
+    return {
+        "single_channel_dir": str(single_cal_output),
+        "channel_count": saved_count,
+        "skipped": False,
+    }
+
+
+def build_calibration_mapping(
+    output_base,
+    single_channel_dir=None,
+    raw_configs_path=None,
+    raw_file_configs=None,
+    conflict_resolution="error",
+    keep_unused=True,
+    short_filenames=True,
+    verbose=True,
+):
+    """Match each raw channel to its calibration data and save the mapping.
+
+    Loads the raw file configurations and the standardized single-channel
+    files, runs the matching algorithm, moves aside any calibration file no raw
+    channel matched, resolves conflicts, writes the mapping files, and verifies
+    the result.
+
+    Reads the single-channel files from disk rather than taking them as data,
+    because the mapping keys are those files' names and because this step
+    rewrites that folder.
+
+    Args:
+        output_base: Root directory the calibration artifacts are written under.
+        single_channel_dir: Folder of standardized single-channel files.
+            Defaults to ``single_channel_calibration_files/`` under
+            *output_base*.
+        raw_configs_path: Path of the saved raw_file_configs.yaml. Defaults to
+            ``raw_file_configs/raw_file_configs.yaml`` under *output_base*.
+            Only consulted when *raw_file_configs* is not supplied.
+        raw_file_configs: The raw file configurations to map. When omitted they
+            are read from the saved raw_file_configs.yaml.
+        conflict_resolution: ``"error"`` raises a ValueError listing the
+            conflicts (default); ``"interactive"`` prompts for a choice, which
+            needs a terminal.
+        keep_unused: If True, unused/rejected calibration files are moved to an
+            ``unused_calibration_files`` subfolder instead of being deleted.
+        short_filenames: If True, remap the returned dictionaries to compact
+            keys.
+        verbose: If True, print progress information.
+
+    Returns:
+        dict with keys:
+            - mapping_dict: {filename: {channel_id: cal_key, ...}, ...}
+            - calibration_dict: {cal_key: {param: value, ...}, ...}
+            - result: The MappingResult object from build_mapping.
+            - missing_params: Dict of calibration keys with missing required
+              parameters (empty dict means all present).
+            - unused_files: List of Path objects for calibration files not
+              referenced by the mapping (empty list means all used).
+    """
+    if conflict_resolution not in ("error", "interactive"):
+        raise ValueError(
+            f"Unknown conflict_resolution mode: {conflict_resolution!r}. "
+            f"Use 'interactive' or 'error'."
+        )
+    if conflict_resolution == "interactive":
+        # Checked before anything is moved, so a run that could not answer the
+        # prompt fails before relocating any file.
+        _console.require_console()
+
+    dirs = _calibration_dirs(output_base, keep_unused=keep_unused)
+    single_cal_output = (
+        dirs["single_cal"] if single_channel_dir is None else Path(single_channel_dir)
+    )
+    mapping_output = dirs["mapping"]
+    unused_cal_output = dirs["unused_cal"]
+
+    if raw_file_configs is None:
+        raw_file_configs = load_raw_configs(
+            dirs["raw_configs"] / "raw_file_configs.yaml"
+            if raw_configs_path is None
+            else Path(raw_configs_path)
+        )
+
+    if verbose:
+        print(f"\nLoaded {len(raw_file_configs)} raw file configurations")
+        print(f"Raw files: {[f['filename'] for f in raw_file_configs]}")
+
+    calibration_data = load_calibration_data_from_single_files(single_cal_output)
+
+    if verbose:
+        print(f"Loaded {len(calibration_data['channels'])} calibration channel(s) "
+              f"from {single_cal_output}")
+
+    result = build_mapping(raw_file_configs, calibration_data, verbose=verbose)
+    result.print_summary()
+
+    # Runs before conflict resolution, so an "error" run has tidied the folder
+    # by the time it raises.
+    handle_unused_calibration_files(
+        result, calibration_data, single_cal_output,
+        keep_unused=keep_unused,
+        unused_dir=unused_cal_output,
+    )
+
+    # Resolve conflicts
+    if conflict_resolution == "interactive":
+        resolve_conflicts_interactive(
+            result, single_cal_output,
+            keep_unused=keep_unused,
+            unused_dir=unused_cal_output,
+        )
+    else:
+        check_for_conflicts(result, cal_files_dir=single_cal_output)
+
+    mapping_dict = result.mapping_dict
+    calibration_dict = result.calibration_dict
+
+    # Preview and save mapping files
+    print_mapping_preview(result)
+
+    mapping_path, calibration_path = save_mapping_files(
+        result, mapping_output, short_filenames=short_filenames,
+    )
+    _artifacts.record_artifact(mapping_path)
+    _artifacts.record_artifact(calibration_path)
+
+    if verbose:
+        print(f"\nSaved mapping dictionary to: {mapping_path}")
+        print(f"Saved calibration dictionary to: {calibration_path}")
+        print(f"\nNote: Single-channel calibration files already exist in: {single_cal_output}")
+
+    if short_filenames:
+        mapping_dict, calibration_dict, short_map = remap_to_short_keys(
+            mapping_dict, calibration_dict,
+        )
+        print_short_key_summary(short_map, result.calibration_dict)
+
+    # Verification
+    missing_params = check_required_calibration_params(calibration_dict)
+    unused_files = verify_calibration_file_usage(calibration_dict, single_cal_output)
+
+    return {
+        "mapping_dict": mapping_dict,
+        "calibration_dict": calibration_dict,
+        "result": result,
+        "missing_params": missing_params,
+        "unused_files": unused_files,
+        # Paths are not JSON-safe, so the recipe output port maps to these.
+        "unused_file_names": [Path(f).name for f in unused_files],
+    }
+
+
+def _scan_and_record_raw_configs(
+    raw_input_folder,
+    output_base,
+    verbose=True,
+    verify_start_time=False,
+    file_time_start=None,
+    file_time_end=None,
+):
+    """Scan a whole folder of raw files and save their configurations.
+
+    The folder at a time scan behind :func:`generate_standardized_cal_mapping`,
+    reused only when ``raw_file_configs.fingerprint.json`` shows the saved
+    configurations came from the same files and window. Recipes fan the scan
+    out per file instead, with :func:`read_raw_file_config` mapped over the raw
+    file list and :func:`record_raw_file_configs` collecting the results.
+
+    Returns:
+        tuple: ``(file_configs, frequencies_set)``.
+    """
+    raw_input_remote = _storage.is_remote(raw_input_folder)
+    if not raw_input_remote:
+        raw_input_folder = Path(raw_input_folder)
+
+    dirs = _calibration_dirs(output_base)
+    raw_configs_path = dirs["raw_configs"] / "raw_file_configs.yaml"
+    raw_scan_fingerprint_path = dirs["raw_configs"] / _RAW_SCAN_FINGERPRINT_NAME
+
+    input_options = _storage.execution_storage_options() if raw_input_remote else None
+    scan_fingerprint = _raw_scan_fingerprint(
+        raw_input_folder, input_options, file_time_start, file_time_end,
+    )
+    reuse_raw_configs = (
+        raw_configs_path.exists()
+        and _read_fingerprint_sidecar(raw_scan_fingerprint_path) == scan_fingerprint
+    )
+
+    if reuse_raw_configs:
+        if verbose:
+            print(f"Raw file configurations match the requested raw files and "
+                  f"window, skipping Step 1: {raw_configs_path}")
+        _artifacts.record_artifact(raw_configs_path)
+        return load_raw_configs(raw_configs_path), None
+
+    if raw_input_remote:
+        file_configs, frequencies_set = _process_raw_folder_remote(
+            str(raw_input_folder),
+            storage_options=input_options,
+            verbose=verbose,
+            verify_start_time=verify_start_time,
+            file_time_start=file_time_start,
+            file_time_end=file_time_end,
+        )
+    else:
+        # Filter the glob result up front so excluded files are never read
+        # in full (the boundary file's headers are read to place it).
+        local_raw_files = sorted(raw_input_folder.glob("*.raw"))
+        if file_time_start is not None or file_time_end is not None:
+            before = len(local_raw_files)
+            local_raw_files = _storage.filter_paths_by_file_time(
+                local_raw_files,
+                file_time_start,
+                file_time_end,
+                verbose=verbose,
+            )
+            if verbose:
+                print(
+                    f"  Filename-time filter: {before} -> "
+                    f"{len(local_raw_files)} raw file(s) "
+                    f"({file_time_start} to {file_time_end})"
+                )
+            if not local_raw_files:
+                raise FileNotFoundError(
+                    f"No .raw files in {raw_input_folder} within the "
+                    f"filename-time window ({file_time_start} to {file_time_end})"
+                )
+            raw_files_arg = local_raw_files
+        else:
+            # Let process_raw_folder glob as before (byte-identical path).
+            raw_files_arg = None
+
+        file_configs, frequencies_set = process_raw_folder(
+            raw_input_folder,
+            verbose=verbose,
+            verify_start_time=verify_start_time,
+            raw_files=raw_files_arg,
+        )
+
+    save_yaml(file_configs, raw_configs_path)
+    # Written after the configs so a crash mid-scan leaves no fingerprint
+    # claiming the incomplete file is current.
+    _write_fingerprint_sidecar(raw_scan_fingerprint_path, scan_fingerprint)
+    _artifacts.record_artifact(raw_configs_path)
+    if verbose:
+        print(f"\nSaved raw file configurations to: {raw_configs_path}")
+
+    return file_configs, frequencies_set
+
+
 def generate_standardized_cal_mapping(
     raw_input_folder,
     cal_input_folder,
@@ -761,6 +1362,11 @@ def generate_standardized_cal_mapping(
     """Run the full calibration pipeline: raw config extraction, calibration
     standardization, channel-to-calibration mapping, and verification.
 
+    A thin sequence over the public steps, which a recipe calls individually so
+    each is cached on its own: :func:`read_raw_file_config` and
+    :func:`record_raw_file_configs`, :func:`standardize_calibration_files`,
+    then :func:`build_calibration_mapping`.
+
     Steps performed:
       1. Read raw file configurations and save to YAML.
       2. Parse manufacturer calibration files (EK60/EK80), validate, and save
@@ -778,11 +1384,11 @@ def generate_standardized_cal_mapping(
         for now, recorded in a ``raw_file_configs.fingerprint.json`` sidecar.
         Point *raw_input_folder* somewhere else, or move the window, and the
         scan re-runs. This is the expensive step on a ``gs://`` folder.
-      * Step 2 is reused whenever *output_base* already holds any
-        single-channel file. That is what makes the ``"error"`` conflict
-        workflow work: delete the unwanted file, re-run, and the rest survive.
-        To force a full re-parse, empty
-        ``single_channel_calibration_files/``.
+      * Step 2 is reused when ``standardization.fingerprint.json`` shows the
+        same manufacturer files already produced the single-channel files that
+        are there. Deleting one of those files does not bring it back, which is
+        what the ``"error"`` conflict workflow relies on. To force a re-parse,
+        delete the sidecar.
 
     Steps 3 and 4 always run, so the mapping files always reflect the current
     raw configs and single-channel files.
@@ -841,292 +1447,46 @@ def generate_standardized_cal_mapping(
               parameters (empty dict means all present).
             - unused_files: List of Path objects for calibration files not
               referenced by the mapping (empty list means all used).
+            - unused_file_names: The same files as plain names, which unlike
+              Path objects survive a round trip through JSON.
     """
-    # Coerce only local values: Path() mangles a URL ("gs://b/x" -> "gs:/b/x").
-    # Outputs always stay local, so output_base is coerced unconditionally.
-    raw_input_remote = _storage.is_remote(raw_input_folder)
-    cal_input_remote = _storage.is_remote(cal_input_folder)
-    if not raw_input_remote:
-        raw_input_folder = Path(raw_input_folder)
-    if not cal_input_remote:
-        cal_input_folder = Path(cal_input_folder)
+    # The input folders may be URLs and are coerced by the steps that read
+    # them; outputs always stay local.
     output_base = Path(output_base)
 
-    if global_params is not None and not isinstance(global_params, dict):
-        raise TypeError("global_params must be a dict when provided")
-
-    legacy_params = dict(global_params or {})
-    resolved_cruise_id = cruise_id if cruise_id is not None else legacy_params.get("cruise_id")
-    resolved_record_author = (
-        record_author if record_author is not None else legacy_params.get("record_author")
+    # Validated before any I/O, so a metadata mistake does not half-write a
+    # calibration folder.
+    global_params = _resolve_global_params(
+        cruise_id, record_author, global_params, "generate_standardized_cal_mapping"
     )
 
-    if cruise_id is not None and "cruise_id" in legacy_params and legacy_params["cruise_id"] != cruise_id:
-        raise ValueError(
-            "cruise_id does not match global_params['cruise_id']: "
-            f"{cruise_id!r} != {legacy_params['cruise_id']!r}"
-        )
+    _calibration_dirs(output_base, keep_unused=keep_unused)
 
-    if (
-        record_author is not None
-        and "record_author" in legacy_params
-        and legacy_params["record_author"] != record_author
-    ):
-        raise ValueError(
-            "record_author does not match global_params['record_author']: "
-            f"{record_author!r} != {legacy_params['record_author']!r}"
-        )
-
-    missing_global_keys = [
-        key
-        for key, value in {
-            "cruise_id": resolved_cruise_id,
-            "record_author": resolved_record_author,
-        }.items()
-        if value is None
-    ]
-    if missing_global_keys:
-        missing_keys_str = ", ".join(missing_global_keys)
-        raise ValueError(
-            "generate_standardized_cal_mapping requires values for "
-            f"{missing_keys_str}. Provide them explicitly or via global_params."
-        )
-
-    global_params = {
-        "cruise_id": resolved_cruise_id,
-        "record_author": resolved_record_author,
-    }
-
-    # Create output subdirectories
-    raw_configs_output = output_base / "raw_file_configs"
-    single_cal_output = output_base / "single_channel_calibration_files"
-    mapping_output = output_base / "mapping_files"
-    unused_cal_output = output_base / "unused_calibration_files"
-    logs_output = output_base / "logs"
-
-    for folder in [raw_configs_output, single_cal_output, mapping_output, logs_output]:
-        folder.mkdir(parents=True, exist_ok=True)
-
-    if keep_unused:
-        unused_cal_output.mkdir(parents=True, exist_ok=True)
-
-    raw_configs_path = raw_configs_output / "raw_file_configs.yaml"
-    raw_scan_fingerprint_path = raw_configs_output / _RAW_SCAN_FINGERPRINT_NAME
-
-    input_options = (
-        _storage.execution_storage_options()
-        if (raw_input_remote or cal_input_remote)
-        else None
+    # Step 1: read raw file configurations.
+    _file_configs, frequencies_set = _scan_and_record_raw_configs(
+        raw_input_folder,
+        output_base,
+        verbose=verbose,
+        verify_start_time=verify_start_time,
+        file_time_start=file_time_start,
+        file_time_end=file_time_end,
     )
 
-    # Steps 1 and 2 are cached independently, because they answer to different
-    # inputs: Step 1 to the raw folder and the window, Step 2 to the
-    # manufacturer calibration folder. Gating both on the single-channel files
-    # (as this once did) let a changed raw folder or window go unnoticed, and
-    # Step 3 would then map a stale file list without saying so.
-    scan_fingerprint = _raw_scan_fingerprint(
-        raw_input_folder, input_options, file_time_start, file_time_end,
-    )
-    reuse_raw_configs = (
-        raw_configs_path.exists()
-        and _read_raw_scan_fingerprint(raw_scan_fingerprint_path) == scan_fingerprint
+    # Step 2: convert manufacturer files to standardized single-channel files.
+    standardize_calibration_files(
+        cal_input_folder,
+        output_base,
+        frequencies=frequencies_set,
+        global_params=global_params,
+        short_filenames=short_filenames,
+        verbose=verbose,
     )
 
-    # Carried from Step 1 to Step 2 when both run; recovered from the saved
-    # configs when only Step 2 does.
-    frequencies_set = None
-
-    if reuse_raw_configs:
-        if verbose:
-            print(f"Raw file configurations match the requested raw files and "
-                  f"window, skipping Step 1: {raw_configs_path}")
-    else:
-        # Step 1: Read raw file configurations
-        if raw_input_remote:
-            file_configs, frequencies_set = _process_raw_folder_remote(
-                str(raw_input_folder),
-                storage_options=input_options,
-                verbose=verbose,
-                verify_start_time=verify_start_time,
-                file_time_start=file_time_start,
-                file_time_end=file_time_end,
-            )
-        else:
-            # Filter the glob result up front so excluded files are never read
-            # in full (the boundary file's headers are read to place it).
-            local_raw_files = sorted(raw_input_folder.glob("*.raw"))
-            if file_time_start is not None or file_time_end is not None:
-                before = len(local_raw_files)
-                local_raw_files = _storage.filter_paths_by_file_time(
-                    local_raw_files,
-                    file_time_start,
-                    file_time_end,
-                    verbose=verbose,
-                )
-                if verbose:
-                    print(
-                        f"  Filename-time filter: {before} -> "
-                        f"{len(local_raw_files)} raw file(s) "
-                        f"({file_time_start} to {file_time_end})"
-                    )
-                if not local_raw_files:
-                    raise FileNotFoundError(
-                        f"No .raw files in {raw_input_folder} within the "
-                        f"filename-time window ({file_time_start} to {file_time_end})"
-                    )
-                raw_files_arg = local_raw_files
-            else:
-                # Let process_raw_folder glob as before (byte-identical path).
-                raw_files_arg = None
-
-            file_configs, frequencies_set = process_raw_folder(
-                raw_input_folder,
-                verbose=verbose,
-                verify_start_time=verify_start_time,
-                raw_files=raw_files_arg,
-            )
-        save_yaml(file_configs, raw_configs_path)
-        # Written after the configs so a crash mid-scan leaves no fingerprint
-        # claiming the incomplete file is current.
-        with open(raw_scan_fingerprint_path, "w", encoding="utf-8") as f:
-            json.dump(scan_fingerprint, f, indent=2)
-        if verbose:
-            print(f"\nSaved raw file configurations to: {raw_configs_path}")
-
-    # If single-channel calibration files already exist, skip Step 2. This
-    # allows the "error" conflict-resolution workflow: after a conflict is
-    # raised, the user deletes the unwanted file(s) and re-runs the cell
-    # without Step 2 regenerating them.
-    existing_cal_files = (
-        list(single_cal_output.glob("*.yaml")) + list(single_cal_output.glob("*.yml"))
-    )
-    if existing_cal_files:
-        if verbose:
-            print(f"Found {len(existing_cal_files)} existing single-channel calibration "
-                  f"file(s) in {single_cal_output}, skipping Step 2.")
-    else:
-        if frequencies_set is None:
-            frequencies_set = _frequencies_from_configs(
-                load_raw_configs(raw_configs_path)
-            )
-
-        # Step 2: Parse manufacturer calibration files. The parsers are strictly
-        # local-filesystem code, so a remote cal folder is materialized locally
-        # for the duration of the parse (these files are small).
-        if cal_input_remote:
-            with _storage.localized_folder(
-                str(cal_input_folder),
-                ("*.cal", "*.xml"),
-                input_options,
-            ) as local_cal_folder:
-                cal_params, env_params, other_params, cal_file_type = \
-                    manufacturer_file_parsers.extract_and_convert_calibration_params(
-                        local_cal_folder,
-                        nc_frequencies=frequencies_set,
-                        output_logs_folder=logs_output,
-                    )
-        else:
-            cal_params, env_params, other_params, cal_file_type = \
-                manufacturer_file_parsers.extract_and_convert_calibration_params(
-                    cal_input_folder,
-                    nc_frequencies=frequencies_set,
-                    output_logs_folder=logs_output,
-                )
-
-        if verbose:
-            print(f"\nParsed {cal_file_type} calibration parameters:")
-            print(f"Channels: {other_params.get('channel')}")
-            print(f"Frequencies: {other_params.get('frequency_nominal')}")
-            print(f"Gain corrections: {cal_params.get('gain_correction')}")
-            print(f"Sa corrections: {cal_params.get('sa_correction')}")
-            print(f"Equivalent beam angles: {cal_params.get('equivalent_beam_angle')}")
-
-        # Save as single-channel files
-        saved_count, _, standardized_dict = standardized_file_lib.save_single_channel_files_from_params(
-            cal_params,
-            env_params,
-            other_params,
-            global_params,
-            output_dir=single_cal_output,
-            short_filenames=short_filenames,
-        )
-
-        if verbose:
-            print(f"\nSaved {saved_count} single-channel calibration file(s) to: {single_cal_output}")
-            print("\nSingle-channel calibration files:")
-            for f in sorted(single_cal_output.glob("*.yaml")):
-                size_kb = f.stat().st_size / 1024
-                print(f"  {f.name} ({size_kb:.1f} KB)")
-
-    # Step 3: Load configs, build mapping, save
-    raw_file_configs = load_raw_configs(raw_configs_path)
-
-    if verbose:
-        print(f"\nLoaded {len(raw_file_configs)} raw file configurations")
-        print(f"Raw files: {[f['filename'] for f in raw_file_configs]}")
-
-    calibration_data = load_calibration_data_from_single_files(single_cal_output)
-
-    if verbose:
-        print(f"Loaded {len(calibration_data['channels'])} calibration channel(s) "
-              f"from {single_cal_output}")
-
-    result = build_mapping(raw_file_configs, calibration_data, verbose=verbose)
-    result.print_summary()
-
-    # Handle unused calibration files
-    handle_unused_calibration_files(
-        result, calibration_data, single_cal_output,
+    # Steps 3 and 4: map, resolve conflicts, save, verify.
+    return build_calibration_mapping(
+        output_base,
+        conflict_resolution=conflict_resolution,
         keep_unused=keep_unused,
-        unused_dir=unused_cal_output,
+        short_filenames=short_filenames,
+        verbose=verbose,
     )
-
-    # Resolve conflicts
-    if conflict_resolution == "interactive":
-        resolve_conflicts_interactive(
-            result, single_cal_output,
-            keep_unused=keep_unused,
-            unused_dir=unused_cal_output,
-        )
-    elif conflict_resolution == "error":
-        check_for_conflicts(result, cal_files_dir=single_cal_output)
-    else:
-        raise ValueError(
-            f"Unknown conflict_resolution mode: {conflict_resolution!r}. "
-            f"Use 'interactive' or 'error'."
-        )
-
-    mapping_dict = result.mapping_dict
-    calibration_dict = result.calibration_dict
-
-    # Preview and save mapping files
-    print_mapping_preview(result)
-
-    mapping_path, calibration_path = save_mapping_files(
-        result, mapping_output, short_filenames=short_filenames,
-    )
-
-    if verbose:
-        print(f"\nSaved mapping dictionary to: {mapping_path}")
-        print(f"Saved calibration dictionary to: {calibration_path}")
-        print(f"\nNote: Single-channel calibration files already exist in: {single_cal_output}")
-
-    if short_filenames:
-        mapping_dict, calibration_dict, short_map = remap_to_short_keys(
-            mapping_dict, calibration_dict,
-        )
-        print_short_key_summary(short_map, result.calibration_dict)
-
-    # Verification
-    missing_params = check_required_calibration_params(calibration_dict)
-    unused_files = verify_calibration_file_usage(calibration_dict, single_cal_output)
-
-    return {
-        "mapping_dict": mapping_dict,
-        "calibration_dict": calibration_dict,
-        "result": result,
-        "missing_params": missing_params,
-        "unused_files": unused_files,
-    }
-
-

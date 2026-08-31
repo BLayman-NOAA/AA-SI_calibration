@@ -88,8 +88,13 @@ def _patch_generate_standardized_cal_mapping(monkeypatch, tmp_path):
         ),
     )
 
-    def _save_single_channel_files(*_args, global_params, **_kwargs):
-        captured["global_params"] = global_params
+    def _save_single_channel_files(*_args, **_kwargs):
+        # The real callable names this parameter other_global_params and takes
+        # it as the 4th positional argument; accept either form.
+        if "other_global_params" in _kwargs:
+            captured["global_params"] = _kwargs["other_global_params"]
+        else:
+            captured["global_params"] = _args[3]
         return 1, None, {"saved": True}
 
     monkeypatch.setattr(
