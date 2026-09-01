@@ -169,6 +169,38 @@ def localized_file(
 
 
 @contextlib.contextmanager
+def localized_file_head(
+    url: str,
+    max_bytes: int,
+    storage_options: dict[str, Any] | None = None,
+) -> Iterator[Path]:
+    """Download only the first *max_bytes* of a remote file to local scratch.
+
+    One ranged GET, not a whole-file transfer. An EK80 file's channel
+    configuration lives in the datagrams at the front of the file, so a prefix
+    settles it without moving the sample payloads behind it. The prefix is a
+    valid datagram stream up to its truncation point, which is where a walk
+    over it stops.
+
+    Args:
+        url: Remote fsspec URL of the file.
+        max_bytes: How many leading bytes to fetch.
+        storage_options: fsspec options for the remote filesystem.
+
+    Yields:
+        Path: The local prefix copy, deleted when the context exits.
+    """
+    fs = get_fs(url, storage_options)
+    scratch = Path(tempfile.mkdtemp(prefix="aa_si_localized_head_"))
+    try:
+        local_path = scratch / basename(url)
+        local_path.write_bytes(fs.cat_file(str(url), start=0, end=max_bytes))
+        yield local_path
+    finally:
+        _rmtree_local(scratch)
+
+
+@contextlib.contextmanager
 def localized_folder(
     url: str,
     patterns: tuple[str, ...] = ("*.cal", "*.xml"),

@@ -858,7 +858,71 @@ def _process_raw_folder_remote(
     return file_configs, frequencies_set
 
 
-def read_raw_file_config(raw_file_path, verify_start_time=False, verbose=True):
+#: Fields :func:`_read_config_from_prefix` cannot measure from a prefix, because
+#: each is accumulated over every datagram in the file.
+_WHOLE_FILE_FIELDS = ("raw3_count", "gps_data")
+
+
+def _channels_are_complete(config):
+    """True when every channel carries values from a Parameter datagram.
+
+    A prefix that stops before a channel's first Parameter datagram still
+    yields that channel, built from the Configuration datagram alone: no pulse
+    length, no transmit power, and a pulse_form defaulted to CW that would
+    misreport an FM channel. Such a configuration is not usable, and the caller
+    reads the whole file instead.
+    """
+    channels = config.get("channels")
+    if not channels:
+        return False
+    return all(
+        channel.get("transmit_duration_nominal") is not None
+        and channel.get("transmit_power") is not None
+        for channel in channels
+    )
+
+
+def _read_config_from_prefix(url, max_scan_bytes, storage_options, verbose=True):
+    """Read an EK80 file's channel configuration from its leading bytes.
+
+    Returns None when the prefix does not settle the configuration, which sends
+    the caller back to the whole-file read: a non-EK80 file, a prefix too short
+    to reach every channel's Parameter datagram, or a file that does not scan.
+
+    ``last_ping_time`` is recovered from the file's tail, which costs a few
+    hundred bytes. The fields in :data:`_WHOLE_FILE_FIELDS` are cleared rather
+    than reported from the prefix, where they would count only the datagrams
+    that happened to fit.
+    """
+    from datetime import timezone
+
+    from .raw_file_times import last_ping_time
+    from .raw_reader_api import detect_instrument_type, process_raw_file
+
+    with _storage.localized_file_head(
+        url, max_scan_bytes, storage_options=storage_options
+    ) as prefix:
+        if detect_instrument_type(prefix) != "EK80":
+            return None
+        config = process_raw_file(prefix, verbose=verbose, verify_start_time=False)
+
+    if config is None or not _channels_are_complete(config):
+        return None
+
+    for field in _WHOLE_FILE_FIELDS:
+        config[field] = None
+    end = last_ping_time(url, storage_options=storage_options)
+    config["last_ping_time"] = (
+        end.replace(tzinfo=timezone.utc).isoformat(timespec="milliseconds")
+        if end is not None
+        else None
+    )
+    return config
+
+
+def read_raw_file_config(
+    raw_file_path, verify_start_time=False, verbose=True, max_scan_bytes=None
+):
     """Read one raw file's channel configuration.
 
     The single-file half of :func:`process_raw_folder`. A remote file is
@@ -871,6 +935,14 @@ def read_raw_file_config(raw_file_path, verify_start_time=False, verbose=True):
         verify_start_time: If True, EK80 files are additionally read with the
             full SimradFileReader to verify metadata_start_time (slower).
         verbose: If True, print progress information.
+        max_scan_bytes: When set, read only this many leading bytes of a remote
+            EK80 file instead of transferring it whole. The channel
+            configuration sits within the first few MiB, so this is the setting
+            for scanning a survey whose raw files are large or far away. Falls
+            back to the whole file whenever the prefix does not settle the
+            configuration, and reports ``raw3_count`` and ``gps_data`` as None
+            because a prefix cannot measure them. Ignored for local files and
+            when verify_start_time is set.
 
     Returns:
         dict: The file's configuration, or None when it could not be read.
@@ -884,12 +956,18 @@ def read_raw_file_config(raw_file_path, verify_start_time=False, verbose=True):
         )
     else:
         storage_options = _storage.execution_storage_options()
-        with _storage.localized_file(
-            str(raw_file_path), storage_options=storage_options
-        ) as local_raw:
-            config = process_raw_file(
-                local_raw, verbose=verbose, verify_start_time=verify_start_time
+        config = None
+        if max_scan_bytes and not verify_start_time:
+            config = _read_config_from_prefix(
+                str(raw_file_path), max_scan_bytes, storage_options, verbose=verbose
             )
+        if config is None:
+            with _storage.localized_file(
+                str(raw_file_path), storage_options=storage_options
+            ) as local_raw:
+                config = process_raw_file(
+                    local_raw, verbose=verbose, verify_start_time=verify_start_time
+                )
 
     if config is None:
         return None
