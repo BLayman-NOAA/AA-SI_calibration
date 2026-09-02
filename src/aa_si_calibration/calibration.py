@@ -882,12 +882,36 @@ def _channels_are_complete(config):
     )
 
 
+#: First prefix tried. A CW file settles well inside this; an FM file's
+#: Parameter datagrams sit behind much larger RAW3 payloads and generally do
+#: not, which is what the ladder above it is for.
+_PREFIX_LADDER_START = 8 * 2**20
+
+
+def _prefix_ladder(max_bytes, start=None):
+    """Yield doubling prefix sizes from *start* up to *max_bytes*, inclusive.
+
+    Doubling rather than jumping straight to *max_bytes* keeps the common case
+    cheap: a file whose configuration settles early pays one small read, and
+    only the files that need more climb. Because the local prefix grows in
+    place, climbing transfers each byte once.
+    """
+    n_bytes = min(start or _PREFIX_LADDER_START, max_bytes)
+    while True:
+        yield n_bytes
+        if n_bytes >= max_bytes:
+            return
+        n_bytes = min(n_bytes * 2, max_bytes)
+
+
 def _read_config_from_prefix(url, max_scan_bytes, storage_options, verbose=True):
     """Read an EK80 file's channel configuration from its leading bytes.
 
-    Returns None when the prefix does not settle the configuration, which sends
-    the caller back to the whole-file read: a non-EK80 file, a prefix too short
-    to reach every channel's Parameter datagram, or a file that does not scan.
+    Climbs :func:`_prefix_ladder`, extending the local prefix until the channel
+    configuration is complete. Returns None when it never is, which sends the
+    caller back to the whole-file read: a non-EK80 file, a file whose
+    configuration is not settled within *max_scan_bytes*, or one that does not
+    scan at all.
 
     ``last_ping_time`` is recovered from the file's tail, which costs a few
     hundred bytes. The fields in :data:`_WHOLE_FILE_FIELDS` are cleared rather
@@ -899,14 +923,24 @@ def _read_config_from_prefix(url, max_scan_bytes, storage_options, verbose=True)
     from .raw_file_times import last_ping_time
     from .raw_reader_api import detect_instrument_type, process_raw_file
 
-    with _storage.localized_file_head(
-        url, max_scan_bytes, storage_options=storage_options
-    ) as prefix:
-        if detect_instrument_type(prefix) != "EK80":
-            return None
-        config = process_raw_file(prefix, verbose=verbose, verify_start_time=False)
+    config = None
+    with _storage.localized_file_head(url, storage_options=storage_options) as fetch:
+        for n_bytes in _prefix_ladder(max_scan_bytes):
+            prefix = fetch(n_bytes)
+            if detect_instrument_type(prefix) != "EK80":
+                return None
+            candidate = process_raw_file(
+                prefix, verbose=verbose, verify_start_time=False
+            )
+            if candidate is not None and _channels_are_complete(candidate):
+                config = candidate
+                break
+            # A short read means the object is exhausted, so no larger prefix
+            # exists and the whole-file path is the only thing left to try.
+            if prefix.stat().st_size < n_bytes:
+                break
 
-    if config is None or not _channels_are_complete(config):
+    if config is None:
         return None
 
     for field in _WHOLE_FILE_FIELDS:

@@ -171,31 +171,46 @@ def localized_file(
 @contextlib.contextmanager
 def localized_file_head(
     url: str,
-    max_bytes: int,
     storage_options: dict[str, Any] | None = None,
-) -> Iterator[Path]:
-    """Download only the first *max_bytes* of a remote file to local scratch.
+) -> Iterator[Any]:
+    """Yield a callable that materializes a growing prefix of a remote file.
 
-    One ranged GET, not a whole-file transfer. An EK80 file's channel
-    configuration lives in the datagrams at the front of the file, so a prefix
-    settles it without moving the sample payloads behind it. The prefix is a
-    valid datagram stream up to its truncation point, which is where a walk
-    over it stops.
+    ``fetch(n)`` extends the local copy to *n* bytes and returns its path,
+    requesting only the bytes not already held. Walking a ladder of prefix
+    sizes therefore costs one ranged GET per rung and transfers each byte
+    once, rather than re-reading from zero at every rung.
+
+    An EK80 file's channel configuration lives in the datagrams at the front
+    of the file, so a prefix settles it without moving the sample payloads
+    behind it. A prefix is a valid datagram stream up to its truncation point,
+    which is where a walk over it stops. ``fetch`` returning a file shorter
+    than requested means the whole object is now local.
 
     Args:
         url: Remote fsspec URL of the file.
-        max_bytes: How many leading bytes to fetch.
         storage_options: fsspec options for the remote filesystem.
 
     Yields:
-        Path: The local prefix copy, deleted when the context exits.
+        Callable[[int], Path]: Extends the local prefix and returns its path.
+        The scratch directory is deleted when the context exits.
     """
     fs = get_fs(url, storage_options)
     scratch = Path(tempfile.mkdtemp(prefix="aa_si_localized_head_"))
     try:
         local_path = scratch / basename(url)
-        local_path.write_bytes(fs.cat_file(str(url), start=0, end=max_bytes))
-        yield local_path
+        local_path.touch()
+        held = 0
+
+        def fetch(n_bytes: int) -> Path:
+            nonlocal held
+            if n_bytes > held:
+                chunk = fs.cat_file(str(url), start=held, end=n_bytes)
+                with open(local_path, "ab") as handle:
+                    handle.write(chunk)
+                held += len(chunk)
+            return local_path
+
+        yield fetch
     finally:
         _rmtree_local(scratch)
 

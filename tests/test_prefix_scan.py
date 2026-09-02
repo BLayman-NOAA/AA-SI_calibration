@@ -166,3 +166,95 @@ def test_short_prefix_falls_back_to_whole_file(tmp_path):
         assert config["raw3_count"] == whole["raw3_count"]
     finally:
         fs.rm("/short", recursive=True)
+
+
+def test_prefix_ladder_doubles_up_to_the_cap():
+    """The ladder doubles from the start and ends exactly on the cap."""
+    from aa_si_calibration.calibration import _prefix_ladder
+
+    assert list(_prefix_ladder(64, start=8)) == [8, 16, 32, 64]
+    # A cap that is not a power-of-two multiple still ends on the cap.
+    assert list(_prefix_ladder(50, start=8)) == [8, 16, 32, 50]
+    # A cap below the start collapses to a single rung.
+    assert list(_prefix_ladder(4, start=8)) == [4]
+    assert list(_prefix_ladder(8, start=8)) == [8]
+
+
+@pytest.mark.skipif(not _ek80_files(), reason="EK80 example data not available")
+def test_escalates_past_a_first_rung_that_is_too_small(monkeypatch):
+    """A file needing more than the first rung climbs instead of falling back.
+
+    The first rung is forced down to 64 KiB, which reaches the Configuration
+    datagram but not the Parameter datagrams, so settling the config requires
+    the ladder to climb.
+    """
+    fsspec = pytest.importorskip("fsspec")
+    from aa_si_calibration import calibration
+
+    raw_path = _ek80_files()[0]
+    url = f"memory://climb/{raw_path.name}"
+    fs = fsspec.filesystem("memory")
+    fs.mkdirs("/climb", exist_ok=True)
+    with open(raw_path, "rb") as src, fs.open(f"/climb/{raw_path.name}", "wb") as dst:
+        dst.write(src.read())
+
+    monkeypatch.setattr(calibration, "_PREFIX_LADDER_START", 64 * 2**10)
+    try:
+        config = calibration._read_config_from_prefix(
+            url, PREFIX_BYTES, None, verbose=False
+        )
+        assert config is not None, "should have climbed rather than given up"
+        whole = process_raw_file(raw_path, verbose=False)
+        assert config["channels"] == whole["channels"]
+    finally:
+        fs.rm("/climb", recursive=True)
+
+
+@pytest.mark.skipif(not _ek80_files(), reason="EK80 example data not available")
+def test_climbing_transfers_each_byte_once(monkeypatch):
+    """Rungs fetch only the bytes beyond what is already held.
+
+    Re-reading from zero at every rung would make a four-rung climb cost about
+    twice the final prefix, which is the whole reason the local copy grows in
+    place rather than being replaced.
+    """
+    fsspec = pytest.importorskip("fsspec")
+    from aa_si_calibration import _storage, calibration
+
+    raw_path = _ek80_files()[0]
+    url = f"memory://once/{raw_path.name}"
+    fs = fsspec.filesystem("memory")
+    fs.mkdirs("/once", exist_ok=True)
+    with open(raw_path, "rb") as src, fs.open(f"/once/{raw_path.name}", "wb") as dst:
+        dst.write(src.read())
+
+    ranges = []
+    real_get_fs = _storage.get_fs
+
+    def spy_get_fs(u, so=None):
+        filesystem = real_get_fs(u, so)
+        real_cat = filesystem.cat_file
+
+        def cat_file(path, start=None, end=None, **kw):
+            ranges.append((start, end))
+            return real_cat(path, start=start, end=end, **kw)
+
+        monkeypatch.setattr(filesystem, "cat_file", cat_file, raising=False)
+        return filesystem
+
+    monkeypatch.setattr(_storage, "get_fs", spy_get_fs)
+    monkeypatch.setattr(calibration, "_PREFIX_LADDER_START", 64 * 2**10)
+    try:
+        config = calibration._read_config_from_prefix(
+            url, PREFIX_BYTES, None, verbose=False
+        )
+        assert config is not None
+    finally:
+        fs.rm("/once", recursive=True)
+
+    assert len(ranges) > 1, "expected the ladder to climb more than one rung"
+    # Contiguous and non-overlapping: each rung starts where the last ended.
+    for (_, prev_end), (start, _) in zip(ranges, ranges[1:]):
+        assert start == prev_end
+    fetched = sum(end - start for start, end in ranges)
+    assert fetched == ranges[-1][1], "total fetched should equal the final prefix"
