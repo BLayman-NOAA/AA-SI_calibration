@@ -834,6 +834,193 @@ def get_calibration_from_file(
         return yaml.safe_load(f)
 
 
+def assign_calibration_file_stems(
+    channel_dicts,
+    key_func=None,
+    short_filenames=False,
+    verbose=False,
+):
+    """Map each channel to the filename stem its single-channel file uses.
+
+    The stem is what :func:`load_calibration_data_from_single_files` reads back
+    as ``_calibration_file_key``, so the stem, not the calibration key, is the
+    identifier the mapping is built on. Duplicate configurations coming from
+    different source files get ``__1`` / ``__2`` suffixes.
+
+    Args:
+        channel_dicts: List of channel dictionaries.
+        key_func: Optional ``callable(channel_dict) -> str`` returning the
+            calibration key. Defaults to :func:`build_calibration_key`.
+        short_filenames: If True, use the compact
+            ``<date>__<freq>__config-<N>`` scheme instead of the full key.
+        verbose: If True, print a warning naming any duplicated keys.
+
+    Returns:
+        dict: ``{file_stem: channel_dict}`` in the order the channels were
+        supplied.
+    """
+    if key_func is None:
+        key_func = build_calibration_key
+
+    channels = channel_dicts if isinstance(channel_dicts, list) else []
+
+    base_key_groups: dict = {}
+    for channel_data in channels:
+        base_key = key_func(channel_data)
+        base_key_groups.setdefault(base_key, []).append(channel_data)
+
+    keyed_channels: dict = {}
+    for base_key, group in base_key_groups.items():
+        if len(group) == 1:
+            keyed_channels[base_key] = group[0]
+        else:
+            for idx, ch_data in enumerate(group, start=1):
+                keyed_channels[f"{base_key}__{idx}"] = ch_data
+
+    dup_bases = [k for k, v in base_key_groups.items() if len(v) > 1]
+    if dup_bases and verbose:
+        print(f"\n WARNING: {len(dup_bases)} calibration key(s) appeared "
+              f"more than once (same configuration from multiple source files).")
+        print("   Disambiguation suffixes (__1, __2, …) have been appended.")
+        for base_key in dup_bases:
+            print(f"\n   Key: {base_key}")
+            for idx, ch_data in enumerate(base_key_groups[base_key], start=1):
+                src = ch_data.get('source_filenames', ['unknown'])
+                print(f"      __{idx}: {src}")
+
+    if short_filenames:
+        # Short names group by base config so duplicates share config-N.
+        base_representatives = {k: v[0] for k, v in base_key_groups.items()}
+        base_short_map = build_short_filename_map(base_representatives)
+        stems = {}
+        for full_key, ch_data in keyed_channels.items():
+            base_key = key_func(ch_data)
+            base_short = base_short_map[base_key]
+            suffix = full_key[len(base_key):] if full_key != base_key else ''
+            stems[f"{base_short}{suffix}"] = ch_data
+        return stems
+
+    return {
+        calibration_key_to_filename(full_key): ch_data
+        for full_key, ch_data in keyed_channels.items()
+    }
+
+
+def json_safe(obj):
+    """Coerce a value into the types the checkpoint layer stores as JSON.
+
+    Numpy scalars, Decimals, dates and Paths all survive a YAML round trip but
+    are not JSON serializable, and a value that is not JSON safe is checkpointed
+    as a pickle, which the shared survey cache tier refuses.
+
+    Args:
+        obj: Any nested structure of dicts, lists and scalars.
+
+    Returns:
+        The same structure with every leaf a str, int, float, bool or None, and
+        every dict key a str.
+    """
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {str(k): json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [json_safe(v) for v in obj]
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+        return obj.isoformat()
+    if isinstance(obj, Path):
+        return str(obj)
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    return str(obj)
+
+
+def _stem_sort_key(stem):
+    """Sort key that orders the digits inside a stem numerically.
+
+    Stems end in ``config-<N>``, and a plain string sort puts ``config-10``
+    before ``config-2``. The payload's order is what a caller sends back, and
+    the config numbers are reassigned from that order, so a stem that sorted
+    the wrong way would be renumbered on the round trip.
+    """
+    return [
+        int(part) if part.isdigit() else part
+        for part in re.split(r'(\d+)', stem)
+    ]
+
+
+def single_channel_payload(channels_by_stem):
+    """Build the JSON-safe channel payload for a set of single-channel files.
+
+    Shaped exactly like :func:`load_calibration_data_from_single_files` output,
+    so an in-memory payload and a read of the written folder are
+    interchangeable.
+
+    Args:
+        channels_by_stem: ``{file_stem: channel_dict}`` from
+            :func:`assign_calibration_file_stems`.
+
+    Returns:
+        dict: ``{"channels": [...]}`` sorted by stem, each entry carrying its
+        ``_calibration_file_key``.
+    """
+    return {
+        "channels": [
+            json_safe({**_strip_internal_keys(channel),
+                       "_calibration_file_key": stem})
+            for stem, channel in sorted(channels_by_stem.items(),
+                                        key=lambda item: _stem_sort_key(item[0]))
+        ]
+    }
+
+
+def prepare_override_channels(channels):
+    """Validate and normalize caller-supplied channels before they are written.
+
+    Rounding runs before validation because validation rejects excess decimals
+    rather than trimming them, so a value edited in a browser would otherwise be
+    refused rather than rounded.
+
+    Args:
+        channels: List of channel dictionaries, as carried in the
+            ``single_channel_data`` payload. ``_calibration_file_key`` is
+            ignored; stems are re-derived from the supplied values.
+
+    Returns:
+        list: Channel dictionaries ready for :func:`save_single_channel_files`.
+
+    Raises:
+        jsonschema.ValidationError: If a channel does not match the
+            standardized calibration schema.
+    """
+    schema = load_standardized_calibration_schema(SCHEMA_PATH)
+    precision_map = extract_channel_precision_map(schema)
+
+    prepared = []
+    warnings = []
+    for channel in channels:
+        entry = ensure_string_identifiers(_strip_internal_keys(dict(channel)))
+        entry = apply_precision_to_channel(entry, precision_map)
+        entry = convert_numpy_scalars(entry)
+        warnings.extend(sanitize_degree_values(entry, schema))
+        validate_standardized_calibration_dict(entry, SCHEMA_PATH)
+        prepared.append(entry)
+
+    # These values were typed by whoever reviewed the channels, so replacing one
+    # with null without saying so leaves an edit that looks accepted.
+    if warnings:
+        print("\n" + "=" * 80)
+        print("DEGREE VALUE SANITIZATION WARNINGS")
+        print("=" * 80)
+        for warning in warnings:
+            print(warning)
+        print("=" * 80 + "\n")
+
+    return prepared
+
+
 def save_single_channel_files(
     channel_dicts,
     output_dir,
@@ -864,58 +1051,15 @@ def save_single_channel_files(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if key_func is None:
-        key_func = build_calibration_key
+    channels_by_stem = assign_calibration_file_stems(
+        channel_dicts,
+        key_func=key_func,
+        short_filenames=short_filenames,
+        verbose=True,
+    )
 
-    channels = channel_dicts if isinstance(channel_dicts, list) else []
-
-    # Group channels by their base calibration key to detect duplicates
-    base_key_groups: dict = {}  # base_key -> [channel_data, ...]
-    for channel_data in channels:
-        base_key = key_func(channel_data)
-        base_key_groups.setdefault(base_key, []).append(channel_data)
-
-    # Build the full key -> channel_data mapping.
-    # When duplicates exist, append __1, __2, etc. to distinguish them.
-    keyed_channels: dict = {}
-    for base_key, group in base_key_groups.items():
-        if len(group) == 1:
-            keyed_channels[base_key] = group[0]
-        else:
-            for idx, ch_data in enumerate(group, start=1):
-                keyed_channels[f"{base_key}__{idx}"] = ch_data
-
-    # Warn about duplicates
-    dup_bases = [k for k, v in base_key_groups.items() if len(v) > 1]
-    if dup_bases:
-        print(f"\n WARNING: {len(dup_bases)} calibration key(s) appeared "
-              f"more than once (same configuration from multiple source files).")
-        print("   Disambiguation suffixes (__1, __2, …) have been appended.")
-        for base_key in dup_bases:
-            print(f"\n   Key: {base_key}")
-            for idx, ch_data in enumerate(base_key_groups[base_key], start=1):
-                src = ch_data.get('source_filenames', ['unknown'])
-                print(f"      __{idx}: {src}")
-
-    # Build filename mapping
-    if short_filenames:
-        # Short names must group by base config so duplicates share config-N.
-        base_representatives = {k: v[0] for k, v in base_key_groups.items()}
-        base_short_map = build_short_filename_map(base_representatives)
-        filename_map = {}
-        for full_key, ch_data in keyed_channels.items():
-            base_key = key_func(ch_data)
-            base_short = base_short_map[base_key]
-            suffix = full_key[len(base_key):] if full_key != base_key else ''
-            filename_map[full_key] = f"{base_short}{suffix}"
-    else:
-        # Long names: sanitize the full key directly (includes any __N suffix)
-        filename_map = {k: calibration_key_to_filename(k) for k in keyed_channels}
-
-    # Save files
     saved_count = 0
-    for full_key, channel_data in keyed_channels.items():
-        file_stem = filename_map[full_key]
+    for file_stem, channel_data in channels_by_stem.items():
         file_path = output_dir / f"{file_stem}.yaml"
 
         channel_data_cleaned = _strip_internal_keys(ensure_string_identifiers(channel_data))

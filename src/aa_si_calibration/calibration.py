@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 import matplotlib.pyplot as plt
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,9 @@ from aa_si_calibration.mapping_algorithm import (
     handle_unused_calibration_files,
     resolve_conflicts_interactive,
     check_for_conflicts,
+    apply_conflict_choices,
+    describe_conflicts,
+    print_conflict_report,
     check_required_calibration_params,
     verify_calibration_file_usage,
 )
@@ -646,14 +650,28 @@ _STANDARDIZATION_FINGERPRINT_VERSION = 1
 _STANDARDIZATION_FINGERPRINT_NAME = "standardization.fingerprint.json"
 
 
-def _standardization_fingerprint(cal_input_folder, storage_options, short_filenames):
+def _override_digest(override_channels):
+    """Content hash of caller-supplied channels, for the fingerprint."""
+    canonical = json.dumps(
+        override_channels, sort_keys=True, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _standardization_fingerprint(
+    cal_input_folder, storage_options, short_filenames, override_channels=None
+):
     """Identity of a standardization's inputs.
 
     One directory listing locally, one ``ls`` on a bucket; the files are never
     read. ``short_filenames`` participates because it sets the names the
     single-channel files are written under, which are the mapping's keys.
+
+    The override digest is present only when overrides are supplied, so a
+    sidecar written without them stays byte-identical to one written before
+    overrides existed and no re-parse is forced on upgrade.
     """
-    return {
+    fingerprint = {
         "version": _STANDARDIZATION_FINGERPRINT_VERSION,
         "cal_files": sorted(
             _storage.folder_fingerprint(cal_input_folder, "*.cal", storage_options)
@@ -661,6 +679,9 @@ def _standardization_fingerprint(cal_input_folder, storage_options, short_filena
         ),
         "short_filenames": bool(short_filenames),
     }
+    if override_channels is not None:
+        fingerprint["override_digest"] = _override_digest(override_channels)
+    return fingerprint
 
 
 def _read_fingerprint_sidecar(path):
@@ -1065,6 +1086,93 @@ def record_raw_file_configs(file_configs, output_base, verbose=True):
     }
 
 
+def _payload_from_dir(single_cal_output):
+    """Read a single-channel folder back as the JSON-safe channel payload.
+
+    Used where the channels were not built in this call, so the folder is the
+    only place they exist. Coercion is required, not defensive: these files
+    may have been hand-edited, and an unquoted date reloads as a
+    ``datetime.date`` that the checkpoint layer cannot store as JSON.
+    """
+    return standardized_file_lib.json_safe(
+        load_calibration_data_from_single_files(single_cal_output)
+    )
+
+
+def _clear_single_channel_files(single_cal_output):
+    """Delete the single-channel files so a rewrite cannot leave orphans behind.
+
+    Returns:
+        int: How many files were removed.
+    """
+    stale = list(single_cal_output.glob("*.yaml")) + list(
+        single_cal_output.glob("*.yml")
+    )
+    for path in stale:
+        path.unlink()
+    return len(stale)
+
+
+def _write_override_channels(
+    override_channels,
+    single_cal_output,
+    fingerprint_path,
+    fingerprint,
+    short_filenames=True,
+    verbose=True,
+):
+    """Write caller-supplied channels as the single-channel files.
+
+    Replaces the parse when a caller has already reviewed and edited the
+    standardized channels. The folder is cleared first because an override is
+    a complete statement of the channel set: without the clear, a channel the
+    caller discarded would survive as an orphan and still be matched.
+
+    Args:
+        override_channels: ``{"channels": [...]}``, or the bare channel list.
+        single_cal_output: Folder the single-channel files are written to.
+        fingerprint_path: Path of the standardization fingerprint sidecar.
+        fingerprint: The fingerprint to record once the files are written.
+        short_filenames: If True, use the compact naming scheme.
+        verbose: If True, print progress information.
+
+    Returns:
+        dict: The same shape :func:`standardize_calibration_files` returns.
+    """
+    channels = override_channels
+    if isinstance(channels, dict):
+        channels = channels.get("channels", [])
+
+    prepared = standardized_file_lib.prepare_override_channels(channels)
+
+    _clear_single_channel_files(single_cal_output)
+
+    saved_count, _ = standardized_file_lib.save_single_channel_files(
+        prepared, single_cal_output, short_filenames=short_filenames
+    )
+    channels_by_stem = standardized_file_lib.assign_calibration_file_stems(
+        prepared, short_filenames=short_filenames
+    )
+
+    _write_fingerprint_sidecar(fingerprint_path, fingerprint)
+    _artifacts.record_artifact(single_cal_output)
+
+    if verbose:
+        print(
+            f"Wrote {saved_count} supplied single-channel calibration file(s) "
+            f"to: {single_cal_output}"
+        )
+
+    return {
+        "single_channel_dir": str(single_cal_output),
+        "channel_count": saved_count,
+        "skipped": False,
+        "single_channel_data": standardized_file_lib.single_channel_payload(
+            channels_by_stem
+        ),
+    }
+
+
 def standardize_calibration_files(
     cal_input_folder,
     output_base,
@@ -1075,6 +1183,7 @@ def standardize_calibration_files(
     short_filenames=True,
     overwrite=False,
     verbose=True,
+    override_channels=None,
 ):
     """Convert manufacturer calibration files to standardized single-channel files.
 
@@ -1128,16 +1237,17 @@ def standardize_calibration_files(
 
     input_options = _storage.execution_storage_options() if cal_input_remote else None
     fingerprint = _standardization_fingerprint(
-        cal_input_folder, input_options, short_filenames
+        cal_input_folder, input_options, short_filenames, override_channels
     )
 
+    previous_fingerprint = _read_fingerprint_sidecar(fingerprint_path)
     existing_cal_files = (
         list(single_cal_output.glob("*.yaml")) + list(single_cal_output.glob("*.yml"))
     )
     if (
         not overwrite
         and existing_cal_files
-        and _read_fingerprint_sidecar(fingerprint_path) == fingerprint
+        and previous_fingerprint == fingerprint
     ):
         if verbose:
             print(
@@ -1150,7 +1260,31 @@ def standardize_calibration_files(
             "single_channel_dir": str(single_cal_output),
             "channel_count": len(existing_cal_files),
             "skipped": True,
+            "single_channel_data": _payload_from_dir(single_cal_output),
         }
+
+    if override_channels is not None:
+        return _write_override_channels(
+            override_channels,
+            single_cal_output,
+            fingerprint_path,
+            fingerprint,
+            short_filenames=short_filenames,
+            verbose=verbose,
+        )
+
+    # An override run names its files from the caller's edited values, so the
+    # names a later parse produces need not be the same set and the override's
+    # files would otherwise stay behind for the mapping to glob. Clearing only
+    # on that one transition leaves an ordinary local re-parse alone, which may
+    # legitimately be sharing the folder with files placed there by hand.
+    if previous_fingerprint and "override_digest" in previous_fingerprint:
+        removed = _clear_single_channel_files(single_cal_output)
+        if removed and verbose:
+            print(
+                f"Cleared {removed} single-channel file(s) written from supplied "
+                f"channels, before re-parsing the manufacturer files."
+            )
 
     if frequencies is None:
         frequencies = _frequencies_from_configs(
@@ -1187,7 +1321,7 @@ def standardize_calibration_files(
         print(f"Sa corrections: {cal_params.get('sa_correction')}")
         print(f"Equivalent beam angles: {cal_params.get('equivalent_beam_angle')}")
 
-    saved_count, _, _standardized_dict = standardized_file_lib.save_single_channel_files_from_params(
+    saved_count, _, channel_dicts = standardized_file_lib.save_single_channel_files_from_params(
         cal_params,
         env_params,
         other_params,
@@ -1208,11 +1342,23 @@ def standardize_calibration_files(
             size_kb = f.stat().st_size / 1024
             print(f"  {f.name} ({size_kb:.1f} KB)")
 
+    channels_by_stem = standardized_file_lib.assign_calibration_file_stems(
+        channel_dicts, short_filenames=short_filenames
+    )
     return {
         "single_channel_dir": str(single_cal_output),
         "channel_count": saved_count,
         "skipped": False,
+        "single_channel_data": standardized_file_lib.single_channel_payload(
+            channels_by_stem
+        ),
     }
+
+
+#: What build_calibration_mapping does when a raw channel matches several
+#: calibration files. "report" neither raises nor prompts, so a caller with no
+#: terminal can present the choices and re-run with calibration_choices.
+_CONFLICT_MODES = ("error", "interactive", "report")
 
 
 def build_calibration_mapping(
@@ -1224,6 +1370,7 @@ def build_calibration_mapping(
     keep_unused=True,
     short_filenames=True,
     verbose=True,
+    calibration_choices=None,
 ):
     """Match each raw channel to its calibration data and save the mapping.
 
@@ -1248,7 +1395,12 @@ def build_calibration_mapping(
             are read from the saved raw_file_configs.yaml.
         conflict_resolution: ``"error"`` raises a ValueError listing the
             conflicts (default); ``"interactive"`` prompts for a choice, which
-            needs a terminal.
+            needs a terminal; ``"report"`` neither raises nor prompts, and
+            instead returns the conflicts on the ``conflicts`` key without
+            writing any mapping file.
+        calibration_choices: Optional ``{conflict_id: calibration key to keep}``
+            from a previous run's ``conflicts``. Applied in every mode before
+            that mode's handler runs.
         keep_unused: If True, unused/rejected calibration files are moved to an
             ``unused_calibration_files`` subfolder instead of being deleted.
         short_filenames: If True, remap the returned dictionaries to compact
@@ -1265,10 +1417,10 @@ def build_calibration_mapping(
             - unused_files: List of Path objects for calibration files not
               referenced by the mapping (empty list means all used).
     """
-    if conflict_resolution not in ("error", "interactive"):
+    if conflict_resolution not in _CONFLICT_MODES:
         raise ValueError(
             f"Unknown conflict_resolution mode: {conflict_resolution!r}. "
-            f"Use 'interactive' or 'error'."
+            f"Use {', '.join(repr(m) for m in _CONFLICT_MODES)}."
         )
     if conflict_resolution == "interactive":
         # Checked before anything is moved, so a run that could not answer the
@@ -1304,19 +1456,49 @@ def build_calibration_mapping(
 
     # Runs before conflict resolution, so an "error" run has tidied the folder
     # by the time it raises.
-    handle_unused_calibration_files(
+    moved_aside = handle_unused_calibration_files(
         result, calibration_data, single_cal_output,
         keep_unused=keep_unused,
         unused_dir=unused_cal_output,
     )
 
-    # Resolve conflicts
+    # Supplied decisions are applied in every mode, so a partial set resolves
+    # what it covers and leaves the rest to be prompted, reported or raised.
+    if calibration_choices:
+        rejected = apply_conflict_choices(
+            result, calibration_choices,
+            cal_files_dir=single_cal_output,
+            keep_unused=keep_unused,
+            unused_dir=unused_cal_output,
+        )
+        moved_aside = list(moved_aside) + [
+            single_cal_output / f"{calibration_key_to_filename(k)}.yaml"
+            for k in sorted(rejected)
+        ]
+
     if conflict_resolution == "interactive":
         resolve_conflicts_interactive(
             result, single_cal_output,
             keep_unused=keep_unused,
             unused_dir=unused_cal_output,
         )
+    elif conflict_resolution == "report":
+        if result.multiple_matches:
+            # No mapping file is written while a conflict stands, so a caller
+            # cannot mistake a provisional first match for a decision.
+            print_conflict_report(result, cal_files_dir=single_cal_output)
+            return {
+                "mapping_dict": {},
+                "calibration_dict": {},
+                "result": result,
+                "missing_params": {},
+                # What this run actually moved aside. There is no mapping to
+                # check against yet, so reporting an empty list here would be
+                # an all-clear the run has not earned.
+                "unused_files": moved_aside,
+                "unused_file_names": [Path(f).name for f in moved_aside],
+                "conflicts": describe_conflicts(result),
+            }
     else:
         check_for_conflicts(result, cal_files_dir=single_cal_output)
 
@@ -1355,6 +1537,7 @@ def build_calibration_mapping(
         "unused_files": unused_files,
         # Paths are not JSON-safe, so the recipe output port maps to these.
         "unused_file_names": [Path(f).name for f in unused_files],
+        "conflicts": {},
     }
 
 

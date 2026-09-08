@@ -109,6 +109,10 @@ def test_record_rejects_an_empty_scan(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _stems(single_cal_dir):
+    return sorted(p.stem for p in single_cal_dir.glob("*.yaml"))
+
+
 def _standardize(tmp_path, cal_dir, **kwargs):
     return calibration_module.standardize_calibration_files(
         cal_dir,
@@ -178,6 +182,47 @@ def test_overwrite_forces_a_re_parse(tmp_path, stub_steps):
     _standardize(tmp_path, cal_dir)
     assert _standardize(tmp_path, cal_dir, overwrite=True)["skipped"] is False
     assert stub_steps["parse"] == 2
+
+
+def test_re_parsing_after_an_override_clears_the_supplied_files(tmp_path, stub_steps):
+    """An override names its files from the caller's edited values.
+
+    Editing a date or a frequency renames the file, so a later parse need not
+    produce the same set of names and the override's files would otherwise stay
+    behind for build_mapping to glob and the archive to keep.
+    """
+    cal_dir = _cal_folder(tmp_path, "a.cal")
+    single_cal = tmp_path / "out" / "single_channel_calibration_files"
+
+    _standardize(tmp_path, cal_dir)
+    assert _stems(single_cal) == ["ch-1", "ch-2"]
+
+    _standardize(
+        tmp_path, cal_dir,
+        override_channels={"channels": [{"channel": "edited", "frequency": [38000.0]}]},
+    )
+    supplied = _stems(single_cal)
+    assert supplied and "ch-1" not in supplied and "ch-2" not in supplied
+
+    # Back to the manufacturer files: nothing the override wrote may survive.
+    result = _standardize(tmp_path, cal_dir)
+    assert result["skipped"] is False
+    assert _stems(single_cal) == ["ch-1", "ch-2"]
+
+
+def test_an_ordinary_re_parse_leaves_the_folder_alone(tmp_path, stub_steps):
+    """The clear is scoped to the override transition, not to every re-parse.
+
+    A local user may be sharing this folder with files placed there by hand.
+    """
+    cal_dir = _cal_folder(tmp_path, "a.cal")
+    _standardize(tmp_path, cal_dir)
+    single_cal = tmp_path / "out" / "single_channel_calibration_files"
+    (single_cal / "by-hand.yaml").write_text("channel: kept\n", encoding="utf-8")
+
+    _cal_folder(tmp_path, "a.cal", "b.cal")
+    assert _standardize(tmp_path, cal_dir)["skipped"] is False
+    assert (single_cal / "by-hand.yaml").exists()
 
 
 def test_standardize_returns_a_json_safe_dir(tmp_path, stub_steps):

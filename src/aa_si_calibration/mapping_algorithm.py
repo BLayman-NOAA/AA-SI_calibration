@@ -4,11 +4,12 @@ Matches channels based on transceiver ID, transducer model, pulse form,
 frequency range, transmit power, and transmit duration.
 """
 
+import hashlib
+import json
 import shutil
 import yaml
 import datetime
 from pathlib import Path
-from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -33,6 +34,7 @@ from .standardized_file_lib import (
     remap_to_short_keys,
     _strip_internal_keys,
     _StandardizedFileDumper,
+    json_safe,
 )
 
 
@@ -956,6 +958,275 @@ def handle_unused_calibration_files(
     return unused_files
 
 
+#: Candidate fields carried to a caller resolving a conflict. Date and source
+#: file alone frequently fail to tell two configurations of the same transducer
+#: apart, which is exactly when a duplicate arises.
+CONFLICT_DETAIL_FIELDS = (
+    "calibration_date",
+    "source_filenames",
+    "channel",
+    "transducer_model",
+    "transducer_serial_number",
+    "pulse_form",
+    "nominal_transducer_frequency",
+    "transmit_power",
+    "transmit_duration_nominal",
+    "frequency_start",
+    "frequency_end",
+)
+
+#: Fields left out of ``distinguishing_fields``. Each differs between any two
+#: calibration files by construction rather than by measurement, so naming them
+#: buries the one or two fields a reviewer actually has to weigh.
+NON_DISTINGUISHING_FIELDS = frozenset({
+    "source_filenames",
+    "source_file_location",
+    "source_file_paths",
+    "record_created",
+    "record_author",
+})
+
+
+def _distinguishing_fields(result: MappingResult, candidate_keys: List[str]) -> List[str]:
+    """Names of the fields whose values differ across a conflict's candidates.
+
+    Names only, no values: a caller resolving a conflict already holds the full
+    channel records on the standardization output, and can join them on
+    ``_calibration_file_key``. What it cannot work out for itself is which
+    differences are substantive, because a plain diff of two records also turns
+    up the timestamp and the source filename.
+
+    Args:
+        result: MappingResult from :func:`build_mapping`.
+        candidate_keys: The calibration keys in contention.
+
+    Returns:
+        list: Field names, sorted. Empty when the candidates are identical
+        everywhere it matters, which means the source files are the only thing
+        telling them apart, and empty as well when a candidate's record is not
+        loaded: every field would compare as different against a missing one,
+        which reads as "they differ in every way" rather than "unknown".
+    """
+    records = [result.calibration_dict.get(k) for k in candidate_keys]
+    if len(records) < 2 or not all(records):
+        return []
+
+    differing = []
+    for name in sorted({n for record in records for n in record}):
+        if name.startswith("_") or name in NON_DISTINGUISHING_FIELDS:
+            continue
+        first = records[0].get(name)
+        if any(record.get(name) != first for record in records[1:]):
+            differing.append(name)
+    return differing
+
+
+def conflict_group_id(cal_keys) -> str:
+    """Stable identifier for one conflict, derived from its candidate keys.
+
+    Hashing the sorted key set keeps the id independent of iteration order and
+    identical across processes and machines, which ``hash()`` would not be.
+    Candidate keys contain spaces and separators, so they are not usable as an
+    identifier directly.
+
+    Args:
+        cal_keys: The calibration keys one raw channel matched.
+
+    Returns:
+        str: An id of the form ``conflict-<12 hex characters>``.
+    """
+    canonical = json.dumps(sorted(cal_keys), separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+    return f"conflict-{digest}"
+
+
+def group_conflicts(result: MappingResult) -> Dict[str, List[MultipleMatchChannel]]:
+    """Group a result's multiple matches by their candidate key set.
+
+    Many raw channels across many files collapse into one conflict when they
+    share the same candidates, and that group is the unit a user resolves.
+
+    Args:
+        result: MappingResult from :func:`build_mapping`.
+
+    Returns:
+        dict: ``{conflict_id: [MultipleMatchChannel, ...]}`` in first-appearance
+        order.
+    """
+    groups: Dict[str, List[MultipleMatchChannel]] = {}
+    for mm in result.multiple_matches:
+        groups.setdefault(conflict_group_id(mm.matching_cal_keys), []).append(mm)
+    return groups
+
+
+def _candidate_keys(channels: List[MultipleMatchChannel]) -> List[str]:
+    """Sorted candidate calibration keys for one conflict group."""
+    return sorted(channels[0].matching_cal_keys)
+
+
+def describe_conflicts(result: MappingResult) -> dict:
+    """Describe unresolved conflicts as JSON-safe data a caller can present.
+
+    Each conflict carries the candidate keys, a summary of every candidate, and
+    ``distinguishing_fields`` naming what actually differs between them. The
+    summary is deliberately not the whole record: a caller already holds those
+    on the standardization output and can join them on
+    ``_calibration_file_key``.
+
+    Args:
+        result: MappingResult from :func:`build_mapping`.
+
+    Returns:
+        dict: ``{conflict_id: {...}}``, empty when nothing is unresolved.
+    """
+    described = {}
+    for conflict_id, channels in group_conflicts(result).items():
+        candidate_keys = _candidate_keys(channels)
+        candidates = []
+        for cal_key in candidate_keys:
+            cal_data = result.calibration_dict.get(cal_key, {})
+            entry = {"cal_key": cal_key}
+            entry.update({f: cal_data.get(f) for f in CONFLICT_DETAIL_FIELDS})
+            candidates.append(entry)
+        described[conflict_id] = {
+            "candidate_keys": candidate_keys,
+            "candidates": candidates,
+            "distinguishing_fields": _distinguishing_fields(result, candidate_keys),
+            "affected_channel_ids": sorted({mm.channel_id for mm in channels}),
+            "affected_filenames": sorted({mm.filename for mm in channels}),
+            "affected_channel_count": len(channels),
+        }
+    return json_safe(described)
+
+
+def apply_conflict_choices(
+    result: MappingResult,
+    choices: dict,
+    cal_files_dir: str | Path = None,
+    keep_unused: bool = False,
+    unused_dir: str | Path = None,
+) -> set:
+    """Resolve conflicts from a caller-supplied map of decisions.
+
+    The one implementation behind both the interactive prompt and a
+    non-interactive caller. Only the groups named in *choices* are resolved;
+    the rest stay on ``result.multiple_matches`` for the caller to report or
+    raise on.
+
+    A calibration key is removed only once nothing still needs it: neither kept
+    by another conflict nor a candidate of one that has not been decided yet.
+    Mapping entries are rewritten per ``(filename, channel_id)``, so a channel
+    id shared by two conflicts resolves to its own group's winner.
+
+    Args:
+        result: MappingResult from :func:`build_mapping`, modified in place.
+        choices: ``{conflict_id: chosen calibration key}``.
+        cal_files_dir: Directory holding the single-channel files. When None no
+            file is touched and only the in-memory result changes.
+        keep_unused: If True, move rejected files to *unused_dir*.
+        unused_dir: Destination directory for rejected files.
+
+    Returns:
+        set: The calibration keys that were removed.
+
+    Raises:
+        ValueError: For an unknown conflict id, or a choice that is not one of
+            that conflict's candidates.
+    """
+    if not choices:
+        return set()
+
+    groups = group_conflicts(result)
+    unknown = sorted(set(choices) - set(groups))
+    if unknown:
+        raise ValueError(
+            f"Unknown conflict id(s): {', '.join(unknown)}. "
+            f"Valid id(s): {', '.join(sorted(groups)) or 'none'}."
+        )
+
+    kept_keys = set()
+    rejected_keys = set()
+    replacement = {}
+    for conflict_id, chosen in choices.items():
+        channels = groups[conflict_id]
+        candidate_keys = _candidate_keys(channels)
+        if chosen not in candidate_keys:
+            raise ValueError(
+                f"{chosen!r} is not a candidate for {conflict_id}. "
+                f"Candidates: {', '.join(candidate_keys)}."
+            )
+        kept_keys.add(chosen)
+        rejected_keys.update(k for k in candidate_keys if k != chosen)
+        for mm in channels:
+            replacement[(mm.filename, mm.channel_id)] = chosen
+
+    # A candidate of a conflict nobody has decided yet is still needed: removing
+    # it would strip the details the next report shows and leave a choice that
+    # names a file no longer on disk.
+    still_contested = {
+        cal_key
+        for conflict_id, channels in groups.items()
+        if conflict_id not in choices
+        for cal_key in _candidate_keys(channels)
+    }
+    removable = rejected_keys - kept_keys - still_contested
+
+    for filename, channel_ids in result.mapping_dict.items():
+        for channel_id in list(channel_ids):
+            kept = replacement.get((filename, channel_id))
+            if kept is not None:
+                channel_ids[channel_id] = kept
+
+    if cal_files_dir is not None:
+        cal_files_dir = Path(cal_files_dir)
+        if unused_dir is not None:
+            unused_dir = Path(unused_dir)
+        for cal_key in sorted(removable):
+            cal_file = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yaml"
+            if cal_file.exists():
+                _remove_or_move_file(cal_file, keep_unused, unused_dir)
+
+    for cal_key in removable:
+        result.calibration_dict.pop(cal_key, None)
+
+    resolved = {id(mm) for conflict_id in choices for mm in groups[conflict_id]}
+    result.multiple_matches[:] = [
+        mm for mm in result.multiple_matches if id(mm) not in resolved
+    ]
+    return removable
+
+
+def _render_conflict_block(
+    result: MappingResult,
+    candidate_keys: List[str],
+    channels: List[MultipleMatchChannel],
+    conflict_num: int,
+    total: int,
+) -> str:
+    """Render one conflict as the text block shown to a terminal user.
+
+    Built as text so it can go to both places: printed for the run log, and
+    handed to the prompt, which repeats it on the terminal. Inside a recipe step
+    an ordinary print never reaches the user.
+    """
+    lines = [
+        "-" * 60,
+        f"CONFLICT {conflict_num} of {total}",
+        "-" * 60,
+        "Affected raw channel(s):",
+    ]
+    lines.extend(f"  - {cid}" for cid in sorted({mm.channel_id for mm in channels}))
+    lines.append("")
+    lines.append("Calibration file options:")
+    for i, cal_key in enumerate(candidate_keys, start=1):
+        cal_data = result.calibration_dict.get(cal_key, {})
+        cal_date = cal_data.get('calibration_date', 'unknown')
+        src_files = cal_data.get('source_filenames', ['unknown'])
+        lines.append(f"  [{i}] {cal_key}.yaml")
+        lines.append(f"      calibration_date: {cal_date}  |  source: {src_files}")
+    return "\n".join(lines)
+
+
 def resolve_conflicts_interactive(
     result: MappingResult,
     cal_files_dir: str | Path,
@@ -978,96 +1249,80 @@ def resolve_conflicts_interactive(
     if not result.multiple_matches:
         return
 
-    cal_files_dir = Path(cal_files_dir)
-    if unused_dir is not None:
-        unused_dir = Path(unused_dir)
-
-    groups = defaultdict(list)
-    for mm in result.multiple_matches:
-        key = tuple(sorted(mm.matching_cal_keys))
-        groups[key].append(mm)
+    groups = group_conflicts(result)
 
     print(f"\nConflict: {len(groups)} unique raw configuration(s) matched multiple "
           f"calibration files.")
     print("You will be prompted to choose which file to keep for each conflict.\n")
 
-    keys_to_remove = set()
-
-    for conflict_num, (cal_keys, channels) in enumerate(groups.items(), start=1):
-        unique_channel_ids = sorted(set(mm.channel_id for mm in channels))
-        options = list(cal_keys)
-
-        # Built as text so it can go to both places: printed for the run log,
-        # and handed to the prompt, which repeats it on the terminal. Inside a
-        # recipe step an ordinary print never reaches the user.
-        lines = [
-            "-" * 60,
-            f"CONFLICT {conflict_num} of {len(groups)}",
-            "-" * 60,
-            "Affected raw channel(s):",
-        ]
-        lines.extend(f"  - {cid}" for cid in unique_channel_ids)
-        lines.append("")
-        lines.append("Calibration file options:")
-        for i, cal_key in enumerate(options, start=1):
-            cal_data = result.calibration_dict.get(cal_key, {})
-            cal_date = cal_data.get('calibration_date', 'unknown')
-            src_files = cal_data.get('source_filenames', ['unknown'])
-            lines.append(f"  [{i}] {cal_key}.yaml")
-            lines.append(f"      calibration_date: {cal_date}  |  source: {src_files}")
-        option_block = "\n".join(lines)
+    choices = {}
+    for conflict_num, (conflict_id, channels) in enumerate(groups.items(), start=1):
+        candidate_keys = _candidate_keys(channels)
+        option_block = _render_conflict_block(
+            result, candidate_keys, channels, conflict_num, len(groups)
+        )
         print(option_block)
 
         context = option_block
         while True:
             choice = _console.prompt(
-                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP (1-{len(options)}): ",
+                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP (1-{len(candidate_keys)}): ",
                 context=context,
             ).strip()
-            if choice.isdigit() and 1 <= int(choice) <= len(options):
+            if choice.isdigit() and 1 <= int(choice) <= len(candidate_keys):
                 break
-            invalid = f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND {len(options)}."
+            invalid = f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND {len(candidate_keys)}."
             print(invalid)
             # The options are already on screen; repeat only the correction.
             context = invalid
 
         # The typed answer is not echoed into the log, so record it.
         print(f"  Selected: {choice}")
-        keep_idx = int(choice) - 1
-        kept_key = options[keep_idx]
-        rejected_keys = [k for k in options if k != kept_key]
-        keys_to_remove.update(rejected_keys)
+        kept_key = candidate_keys[int(choice) - 1]
+        choices[conflict_id] = kept_key
 
         print(f"\n  Keeping: {kept_key}.yaml")
         action_word = "Moving" if keep_unused else "Deleting"
-        for rk in rejected_keys:
+        for rk in [k for k in candidate_keys if k != kept_key]:
             print(f"  {action_word}: {rk}.yaml")
 
-    # Remove/move rejected calibration files from disk
-    for cal_key in keys_to_remove:
-        fname = f"{calibration_key_to_filename(cal_key)}.yaml"
-        cal_file = cal_files_dir / fname
-        if cal_file.exists():
-            _remove_or_move_file(cal_file, keep_unused, unused_dir)
-
-    # Update mapping_dict: replace rejected keys with the kept key
-    for filename in result.mapping_dict:
-        for channel_id, cal_key in list(result.mapping_dict[filename].items()):
-            if cal_key in keys_to_remove:
-                for cal_keys_tuple, mms in groups.items():
-                    affected_channels = {mm.channel_id for mm in mms}
-                    if channel_id in affected_channels:
-                        kept = [k for k in cal_keys_tuple if k not in keys_to_remove][0]
-                        result.mapping_dict[filename][channel_id] = kept
-                        break
-
-    # Remove rejected keys from calibration_dict
-    for rk in keys_to_remove:
-        result.calibration_dict.pop(rk, None)
-
-    result.multiple_matches.clear()
+    apply_conflict_choices(
+        result,
+        choices,
+        cal_files_dir=cal_files_dir,
+        keep_unused=keep_unused,
+        unused_dir=unused_dir,
+    )
 
     print("\nAll conflicts resolved.")
+
+
+def print_conflict_report(
+    result: MappingResult, cal_files_dir: str | Path = None
+) -> None:
+    """Print every unresolved conflict and how to resolve one by hand."""
+    groups = group_conflicts(result)
+
+    print(f"\nConflict: {len(groups)} unique raw configuration(s) matched multiple "
+          f"calibration files.")
+    print("Each raw configuration must match exactly ONE calibration file.")
+    if cal_files_dir:
+        print(f"Delete the unwanted file(s) from:\n  {cal_files_dir}")
+    print("Then re-run this step.\n")
+
+    for conflict_id, channels in groups.items():
+        print("-" * 60)
+        print("Conflicting calibration files (keep exactly one):")
+        for cal_key in _candidate_keys(channels):
+            cal_data = result.calibration_dict.get(cal_key, {})
+            cal_date = cal_data.get('calibration_date', 'unknown')
+            src_files = cal_data.get('source_filenames', ['unknown'])
+            print(f"  - {cal_key}.yaml")
+            print(f"    calibration_date: {cal_date}  |  source: {src_files}")
+        print(f"\nAffected channel ID(s):")
+        for cid in sorted({mm.channel_id for mm in channels}):
+            print(f"  - {cid}")
+        print()
 
 
 def check_for_conflicts(result: MappingResult, cal_files_dir: str | Path = None) -> None:
@@ -1088,32 +1343,8 @@ def check_for_conflicts(result: MappingResult, cal_files_dir: str | Path = None)
     if not result.multiple_matches:
         return
 
-    groups = defaultdict(list)
-    for mm in result.multiple_matches:
-        key = tuple(sorted(mm.matching_cal_keys))
-        groups[key].append(mm)
-
-    print(f"\nConflict: {len(groups)} unique raw configuration(s) matched multiple "
-          f"calibration files.")
-    print("Each raw configuration must match exactly ONE calibration file.")
-    if cal_files_dir:
-        print(f"Delete the unwanted file(s) from:\n  {cal_files_dir}")
-    print("Then re-run this step.\n")
-
-    for cal_keys, channels in groups.items():
-        unique_channel_ids = sorted(set(mm.channel_id for mm in channels))
-        print("-" * 60)
-        print("Conflicting calibration files (keep exactly one):")
-        for cal_key in cal_keys:
-            cal_data = result.calibration_dict.get(cal_key, {})
-            cal_date = cal_data.get('calibration_date', 'unknown')
-            src_files = cal_data.get('source_filenames', ['unknown'])
-            print(f"  - {cal_key}.yaml")
-            print(f"    calibration_date: {cal_date}  |  source: {src_files}")
-        print(f"\nAffected channel ID(s):")
-        for cid in unique_channel_ids:
-            print(f"  - {cid}")
-        print()
+    groups = group_conflicts(result)
+    print_conflict_report(result, cal_files_dir=cal_files_dir)
 
     dir_msg = f" in {cal_files_dir}" if cal_files_dir else ""
     raise ValueError(
