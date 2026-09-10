@@ -70,6 +70,7 @@ def stub_pipeline(monkeypatch):
         {
             "mapping_dict": {"file.raw": {"ch-1": "key-1"}},
             "calibration_dict": {"key-1": {"gain_correction": 1.0}},
+            "unmatched_channels": [],
             "print_summary": lambda self: None,
         },
     )()
@@ -78,11 +79,12 @@ def stub_pipeline(monkeypatch):
         lambda *_a, **_k: {"channels": ["ch-1"]},
     )
     monkeypatch.setattr(calibration_module, "build_mapping", lambda *_a, **_k: dummy)
-    for name in (
-        "handle_unused_calibration_files",
-        "check_for_conflicts",
-        "print_mapping_preview",
-    ):
+    # Returns the files it moved aside, which the caller folds into unused_files.
+    monkeypatch.setattr(
+        calibration_module, "handle_unused_calibration_files",
+        lambda *_a, **_k: [],
+    )
+    for name in ("check_for_conflicts", "print_mapping_preview"):
         monkeypatch.setattr(calibration_module, name, lambda *_a, **_k: None)
     monkeypatch.setattr(
         calibration_module, "save_mapping_files",

@@ -59,6 +59,7 @@ class _DummyMappingResult:
     def __init__(self):
         self.mapping_dict = {"file.raw": {"channel-1": "cal-key-1"}}
         self.calibration_dict = {"cal-key-1": {"gain_correction": 1.0}}
+        self.unmatched_channels = []
 
     def print_summary(self):
         return None
@@ -120,7 +121,7 @@ def _patch_generate_standardized_cal_mapping(monkeypatch, tmp_path):
     monkeypatch.setattr(
         calibration_module,
         "handle_unused_calibration_files",
-        lambda *_args, **_kwargs: None,
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
         calibration_module,

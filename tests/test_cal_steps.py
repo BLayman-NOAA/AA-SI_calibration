@@ -243,7 +243,7 @@ def test_interactive_without_a_console_fails_before_moving_anything(tmp_path, mo
     monkeypatch.setattr(
         calibration_module,
         "handle_unused_calibration_files",
-        lambda *a, **k: moved.append(True),
+        lambda *a, **k: (moved.append(True), [])[1],
     )
 
     def _no_console():

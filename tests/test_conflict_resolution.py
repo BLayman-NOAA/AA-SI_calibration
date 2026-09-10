@@ -348,14 +348,22 @@ def test_rejected_file_is_moved_to_the_unused_folder(tmp_path):
     assert (cal_dir / "k2.yaml").exists()
 
 
-def _mapping_step_result(monkeypatch, tmp_path, moved_aside=(), **kwargs):
-    """Run build_calibration_mapping over a stubbed matcher with one conflict."""
+_ONE_CONFLICT = object()
+
+
+def _mapping_step_result(
+    monkeypatch, tmp_path, moved_aside=(), multiple_matches=_ONE_CONFLICT, **kwargs
+):
+    """Run build_calibration_mapping over a stubbed matcher.
+
+    Stubs in one multiple-match conflict by default; pass
+    ``multiple_matches=[]`` for the path where the mapping completes.
+    """
     from aa_si_calibration import calibration as calibration_module
 
-    result = _result(
-        {"a.raw": {"ch-1": "k1"}},
-        [MultipleMatchChannel("a.raw", "ch-1", 2, ["k1", "k2"])],
-    )
+    if multiple_matches is _ONE_CONFLICT:
+        multiple_matches = [MultipleMatchChannel("a.raw", "ch-1", 2, ["k1", "k2"])]
+    result = _result({"a.raw": {"ch-1": "k1"}}, multiple_matches)
     monkeypatch.setattr(
         calibration_module, "load_calibration_data_from_single_files",
         lambda *_a, **_k: {"channels": ["ch-1"]},
@@ -415,6 +423,22 @@ def test_report_mode_reports_the_files_it_moved_aside(monkeypatch, tmp_path):
 
     assert out["unused_file_names"] == ["k9.yaml"]
     json.dumps(out["unused_file_names"])
+
+
+def test_completed_mapping_reports_the_files_it_moved_aside(monkeypatch, tmp_path):
+    """Regression: the success path used to report none of them.
+
+    verify_calibration_file_usage only sees the files still in the folder, and
+    the unused ones have already been moved out by then, so on its own it
+    returns an all-clear for exactly the channels that found no calibration.
+    """
+    out, _ = _mapping_step_result(
+        monkeypatch, tmp_path,
+        moved_aside=[tmp_path / "unused_calibration_files" / "k9.yaml"],
+        multiple_matches=[],
+    )
+
+    assert out["unused_file_names"] == ["k9.yaml"]
 
 
 def test_error_mode_still_raises(monkeypatch, tmp_path):

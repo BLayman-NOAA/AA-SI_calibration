@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 
 from aa_si_calibration.utils import CalibrationFlags
 
@@ -23,6 +24,7 @@ from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
 from aa_si_calibration import manufacturer_file_parsers
 from aa_si_calibration import standardized_file_lib
 from aa_si_calibration.mapping_algorithm import (
+    DEFAULT_TOLERANCES,
     load_raw_configs,
     load_calibration_data_from_single_files,
     build_mapping,
@@ -246,8 +248,62 @@ def extract_netcdf_calibration_parameters(echodata, output_logs_folder):
     }
 
 
+#: Standardized field name -> where the same value sits in the structure
+#: extract_netcdf_calibration_parameters returns. Only the fields
+#: extract_standardized_calibration_parameters reads are listed; anything
+#: absent falls back to None, which is what a calibration file missing that
+#: field would give.
+_STORED_FIELD_SOURCES = {
+    "gain_correction": ("cal_params", "gain_correction"),
+    "sa_correction": ("cal_params", "sa_correction"),
+    "equivalent_beam_angle": ("cal_params", "equivalent_beam_angle"),
+    "beamwidth_transmit_major": ("cal_params", "beamwidth_athwartship"),
+    "beamwidth_transmit_minor": ("cal_params", "beamwidth_alongship"),
+    "echoangle_major": ("cal_params", "angle_offset_athwartship"),
+    "echoangle_minor": ("cal_params", "angle_offset_alongship"),
+    "echoangle_major_sensitivity": ("cal_params", "angle_sensitivity_athwartship"),
+    "echoangle_minor_sensitivity": ("cal_params", "angle_sensitivity_alongship"),
+    "absorption_indicative": ("env_params", "sound_absorption"),
+    "frequency": ("other_params", "frequency_nominal"),
+    "transmit_duration_nominal": ("other_params", "transmit_duration_nominal"),
+    "transmit_power": ("other_params", "transmit_power"),
+    "transmit_bandwidth": ("other_params", "transmit_bandwidth"),
+    "sample_interval": ("other_params", "sample_interval"),
+}
+
+
+def _stored_channel_value(values, index):
+    """One channel's value out of a per-channel array, as a plain Python type."""
+    if values is None:
+        return None
+    value = values[index]
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    return standardized_file_lib.json_safe(value)
+
+
+def _stored_channel_data(stored, index, filename):
+    """One channel's recorded values under the standardized field names.
+
+    These are the values the raw file carries itself, which is what echopype
+    calibrates with when no calibration file is supplied at all.
+    """
+    data = {
+        std_key: _stored_channel_value(stored[group].get(field), index)
+        for std_key, (group, field) in _STORED_FIELD_SOURCES.items()
+    }
+    # One value for the file rather than one per channel.
+    data["sound_speed_indicative"] = standardized_file_lib.json_safe(
+        stored["env_params"].get("sound_speed")
+    )
+    data["source_filenames"] = [filename]
+    data["source_file_type"] = ".raw"
+    return data
+
+
 def extract_standardized_calibration_parameters(
     calibration_dict, mapping_dict, filename=None, echodata=None, raw_file_path=None,
+    unmapped_channels="warn", output_logs_folder=None,
 ):
     """Extract standardized calibration parameters in the comparison format.
 
@@ -274,10 +330,28 @@ def extract_standardized_calibration_parameters(
             directly. Convenience for callers (e.g. a per-file recipe step)
             that only have the raw file's path, not its bare name as it
             appears in *mapping_dict*.
+        unmapped_channels: What to do about a channel the mapping does not
+            cover. ``"warn"`` (the default) reports it on the terminal and
+            falls back to the values the raw file itself records, which is what
+            echopype would calibrate that channel with given no calibration
+            file at all. ``"error"`` raises instead. The fallback needs
+            *echodata*; without it a warn run raises the same way an error run
+            would.
+        output_logs_folder: Where the fallback writes its calibration flags.
+            A temporary folder is used when omitted, which is usually what a
+            per-file recipe step wants: several files reading the fallback at
+            once would otherwise race on one flags file.
 
     Returns:
         dict with keys ``cal_params``, ``env_params``, ``other_params``.
+        ``other_params["unmapped_channels"]`` names the channels that fell back
+        to the file's own values, empty when the mapping covered every channel.
     """
+    if unmapped_channels not in ("warn", "error"):
+        raise ValueError(
+            f"Unknown unmapped_channels mode: {unmapped_channels!r}. "
+            "Use 'warn' or 'error'."
+        )
     if filename is None and raw_file_path is not None:
         filename = Path(raw_file_path).name
     if filename is None:
@@ -291,20 +365,49 @@ def extract_standardized_calibration_parameters(
     else:
         ordered_channel_ids = list(file_channels.keys())
 
-    # Collect per-channel standardized data
+    # Collect per-channel standardized data, noting the channels the mapping
+    # does not cover so they can fall back to the file's own values below.
     channel_data_list = []
-    for channel_id in ordered_channel_ids:
+    unmapped = []
+    for index, channel_id in enumerate(ordered_channel_ids):
         cal_key = file_channels.get(channel_id)
         if cal_key is None:
-            raise ValueError(
-                f"Channel '{channel_id}' not found in mapping for '{filename}'"
-            )
+            if unmapped_channels == "error" or echodata is None:
+                raise ValueError(
+                    f"Channel '{channel_id}' not found in mapping for "
+                    f"'{filename}'"
+                )
+            unmapped.append((index, channel_id))
+            channel_data_list.append(None)
+            continue
         cal_data = calibration_dict.get(cal_key)
         if cal_data is None:
             raise ValueError(
                 f"Calibration key '{cal_key}' not found in calibration_dict"
             )
         channel_data_list.append(cal_data)
+
+    if unmapped:
+        _console.console_print(
+            f"\nWARNING: {filename} has {len(unmapped)} channel(s) with no "
+            f"matching calibration. Falling back to the values the raw file "
+            f"records for them, which is what echopype would calibrate with "
+            f"given no calibration file at all:"
+        )
+        for _, channel_id in unmapped:
+            _console.console_print(f"  - {channel_id}")
+        _console.console_print(
+            "  Set unmapped_channels: error on this step to stop instead."
+        )
+        if output_logs_folder is None:
+            with tempfile.TemporaryDirectory() as logs_dir:
+                stored = extract_netcdf_calibration_parameters(echodata, logs_dir)
+        else:
+            stored = extract_netcdf_calibration_parameters(
+                echodata, output_logs_folder
+            )
+        for index, _ in unmapped:
+            channel_data_list[index] = _stored_channel_data(stored, index, filename)
 
     def _unwrap(value):
         """Unwrap single-element list/tuple to scalar."""
@@ -352,6 +455,7 @@ def extract_standardized_calibration_parameters(
         "source_file_type": (
             channel_data_list[0].get("source_file_type") if channel_data_list else None
         ),
+        "unmapped_channels": [channel_id for _, channel_id in unmapped],
     }
 
     return {
@@ -880,27 +984,55 @@ def _process_raw_folder_remote(
 
 
 #: Fields :func:`_read_config_from_prefix` cannot measure from a prefix, because
-#: each is accumulated over every datagram in the file.
-_WHOLE_FILE_FIELDS = ("raw3_count", "gps_data")
+#: each is accumulated over every datagram in the file. Only the ones a given
+#: instrument actually reports are cleared, so an EK80 config does not grow an
+#: EK60 field, or the reverse.
+_WHOLE_FILE_FIELDS = ("raw3_count", "raw0_count", "gps_data")
 
 
-def _channels_are_complete(config):
-    """True when every channel carries values from a Parameter datagram.
+def _channels_are_complete(config, instrument="EK80"):
+    """True when every channel's values come from the data, not just the header.
 
-    A prefix that stops before a channel's first Parameter datagram still
-    yields that channel, built from the Configuration datagram alone: no pulse
-    length, no transmit power, and a pulse_form defaulted to CW that would
-    misreport an FM channel. Such a configuration is not usable, and the caller
-    reads the whole file instead.
+    A prefix that stops before a channel's first per-ping datagram still yields
+    that channel, built from the Configuration datagram alone. On EK80 that
+    shows up as missing values: no pulse length, no transmit power, and a
+    pulse_form defaulted to CW that would misreport an FM channel.
+
+    EK60 is more dangerous, because the missing values are not missing. CON0
+    carries a *configured* transmit power for every channel, so a short prefix
+    yields a complete-looking channel whose power is the header default rather
+    than what the transceiver actually transmitted. Measured on
+    HB1603_L1-D20160707-T192446, a 64 KiB prefix reports 2000 W for all five
+    channels while the file's real values are 2000, 2000, 500, 300 and 750 W:
+    three channels silently wrong, in a parameter that feeds straight into Sv.
+
+    So EK60 completeness is a different question: has every channel been seen
+    transmitting? RAW0 datagrams are written one per channel per ping in
+    transceiver order, so a count reaching the channel count means the first
+    ping cycle is complete and every channel's power has been read from a ping
+    rather than from CON0. That happens at 256 KiB on the file above.
+
+    Args:
+        config (dict): Candidate configuration parsed from a prefix.
+        instrument (str): "EK60" or "EK80", from
+            :func:`detect_instrument_type`.
+
+    Returns:
+        bool: True when the configuration can be trusted without reading the
+        rest of the file.
     """
     channels = config.get("channels")
     if not channels:
         return False
-    return all(
+    if not all(
         channel.get("transmit_duration_nominal") is not None
         and channel.get("transmit_power") is not None
         for channel in channels
-    )
+    ):
+        return False
+    if instrument == "EK60":
+        return (config.get("raw0_count") or 0) >= len(channels)
+    return True
 
 
 #: First prefix tried. A CW file settles well inside this; an FM file's
@@ -926,13 +1058,16 @@ def _prefix_ladder(max_bytes, start=None):
 
 
 def _read_config_from_prefix(url, max_scan_bytes, storage_options, verbose=True):
-    """Read an EK80 file's channel configuration from its leading bytes.
+    """Read a file's channel configuration from its leading bytes.
 
     Climbs :func:`_prefix_ladder`, extending the local prefix until the channel
     configuration is complete. Returns None when it never is, which sends the
-    caller back to the whole-file read: a non-EK80 file, a file whose
-    configuration is not settled within *max_scan_bytes*, or one that does not
-    scan at all.
+    caller back to the whole-file read: a file that is neither EK60 nor EK80,
+    one whose configuration is not settled within *max_scan_bytes*, or one that
+    does not scan at all.
+
+    What "complete" means differs by instrument, and for EK60 it is not the
+    obvious test. See :func:`_channels_are_complete`.
 
     ``last_ping_time`` is recovered from the file's tail, which costs a few
     hundred bytes. The fields in :data:`_WHOLE_FILE_FIELDS` are cleared rather
@@ -948,12 +1083,15 @@ def _read_config_from_prefix(url, max_scan_bytes, storage_options, verbose=True)
     with _storage.localized_file_head(url, storage_options=storage_options) as fetch:
         for n_bytes in _prefix_ladder(max_scan_bytes):
             prefix = fetch(n_bytes)
-            if detect_instrument_type(prefix) != "EK80":
+            instrument = detect_instrument_type(prefix)
+            if instrument not in ("EK60", "EK80"):
                 return None
             candidate = process_raw_file(
                 prefix, verbose=verbose, verify_start_time=False
             )
-            if candidate is not None and _channels_are_complete(candidate):
+            if candidate is not None and _channels_are_complete(
+                candidate, instrument
+            ):
                 config = candidate
                 break
             # A short read means the object is exhausted, so no larger prefix
@@ -964,8 +1102,11 @@ def _read_config_from_prefix(url, max_scan_bytes, storage_options, verbose=True)
     if config is None:
         return None
 
+    # Only clear what this instrument actually reported: assigning a field the
+    # config never had would invent a key and change its shape.
     for field in _WHOLE_FILE_FIELDS:
-        config[field] = None
+        if field in config:
+            config[field] = None
     end = last_ping_time(url, storage_options=storage_options)
     config["last_ping_time"] = (
         end.replace(tzinfo=timezone.utc).isoformat(timespec="milliseconds")
@@ -991,13 +1132,18 @@ def read_raw_file_config(
             full SimradFileReader to verify metadata_start_time (slower).
         verbose: If True, print progress information.
         max_scan_bytes: When set, read only this many leading bytes of a remote
-            EK80 file instead of transferring it whole. The channel
-            configuration sits within the first few MiB, so this is the setting
-            for scanning a survey whose raw files are large or far away. Falls
-            back to the whole file whenever the prefix does not settle the
-            configuration, and reports ``raw3_count`` and ``gps_data`` as None
-            because a prefix cannot measure them. Ignored for local files and
-            when verify_start_time is set.
+            EK60 or EK80 file instead of transferring it whole. This is the
+            setting for scanning a survey whose raw files are large or far
+            away. Falls back to the whole file whenever the prefix does not
+            settle the configuration, and reports the per-file counts and
+            ``gps_data`` as None because a prefix cannot measure them. Ignored
+            for local files and when verify_start_time is set.
+
+            It also bounds where the prefix ladder starts, since that begins at
+            ``min(8 MiB, max_scan_bytes)``. An EK60 survey settles far inside
+            8 MiB, so setting this to 1 MiB turns a cruise-wide scan into one
+            small read per file rather than an 8 MiB one, and still falls back
+            safely on any file the smaller prefix does not settle.
 
     Returns:
         dict: The file's configuration, or None when it could not be read.
@@ -1361,6 +1507,62 @@ def standardize_calibration_files(
 _CONFLICT_MODES = ("error", "interactive", "report")
 
 
+def _merged_tolerances(tolerances):
+    """Merge caller tolerances over the defaults, reporting what was widened.
+
+    Merging rather than replacing means a dict naming only transmit_power keeps
+    exact matching everywhere else. Replacing would silently drop the small
+    float tolerance transmit_duration_nominal needs, and every channel would
+    stop matching.
+    """
+    merged = dict(DEFAULT_TOLERANCES)
+    if not tolerances:
+        return merged
+    merged.update(tolerances)
+    widened = {
+        field: (DEFAULT_TOLERANCES.get(field), value)
+        for field, value in tolerances.items()
+        if value != DEFAULT_TOLERANCES.get(field)
+    }
+    if widened:
+        _console.console_print(
+            "\nWARNING: calibration matching tolerance overridden. A channel "
+            "that matches only under a widened tolerance was calibrated at a "
+            "different setting than it is being applied to:"
+        )
+        for field, (default, value) in sorted(widened.items()):
+            was = "no default" if default is None else f"{default:g}"
+            _console.console_print(f"  - {field}: {was} -> {value:g}")
+    return merged
+
+
+def _warn_unmatched_channels(result):
+    """Report channels no calibration file matched, on the terminal.
+
+    An unmatched channel is not an error here: the mapping is still written for
+    the channels that did match, and the step that consumes it decides whether
+    to fall back or stop. It does need saying out loud, because the run
+    otherwise reports success while some channels have no calibration.
+    """
+    if not result.unmatched_channels:
+        return
+    files_by_channel = {}
+    for unmatched in result.unmatched_channels:
+        files_by_channel.setdefault(unmatched.channel_id, []).append(
+            unmatched.filename
+        )
+    _console.console_print(
+        f"\nWARNING: {len(files_by_channel)} channel(s) matched no calibration "
+        f"file. The mapping was written without them; see the step log for the "
+        f"field each candidate failed on."
+    )
+    for channel_id, filenames in sorted(files_by_channel.items()):
+        _console.console_print(
+            f"  - {channel_id}: {len(filenames)} raw file(s), "
+            f"e.g. {sorted(filenames)[0]}"
+        )
+
+
 def build_calibration_mapping(
     output_base,
     single_channel_dir=None,
@@ -1371,6 +1573,7 @@ def build_calibration_mapping(
     short_filenames=True,
     verbose=True,
     calibration_choices=None,
+    tolerances=None,
 ):
     """Match each raw channel to its calibration data and save the mapping.
 
@@ -1403,6 +1606,12 @@ def build_calibration_mapping(
             that mode's handler runs.
         keep_unused: If True, unused/rejected calibration files are moved to an
             ``unused_calibration_files`` subfolder instead of being deleted.
+        tolerances: Per-field match tolerances, merged over
+            :data:`mapping_algorithm.DEFAULT_TOLERANCES` so a partial dict
+            widens only the fields it names. Widening one is a scientific
+            decision, not a convenience: a calibration that matches only under
+            a widened tolerance was not measured at the setting it is being
+            applied to. Every override is reported on the terminal.
         short_filenames: If True, remap the returned dictionaries to compact
             keys.
         verbose: If True, print progress information.
@@ -1415,7 +1624,9 @@ def build_calibration_mapping(
             - missing_params: Dict of calibration keys with missing required
               parameters (empty dict means all present).
             - unused_files: List of Path objects for calibration files not
-              referenced by the mapping (empty list means all used).
+              referenced by the mapping, including the ones this run moved
+              aside (empty list means every calibration file matched a raw
+              channel).
     """
     if conflict_resolution not in _CONFLICT_MODES:
         raise ValueError(
@@ -1451,8 +1662,14 @@ def build_calibration_mapping(
         print(f"Loaded {len(calibration_data['channels'])} calibration channel(s) "
               f"from {single_cal_output}")
 
-    result = build_mapping(raw_file_configs, calibration_data, verbose=verbose)
+    tolerances = _merged_tolerances(tolerances)
+    result = build_mapping(
+        raw_file_configs, calibration_data, tolerances=tolerances, verbose=verbose
+    )
     result.print_summary()
+    # The per-channel NO MATCH blocks above go to the step log, where an
+    # unattended run never sees them. This one line reaches the terminal.
+    _warn_unmatched_channels(result)
 
     # Runs before conflict resolution, so an "error" run has tidied the folder
     # by the time it raises.
@@ -1525,9 +1742,13 @@ def build_calibration_mapping(
         )
         print_short_key_summary(short_map, result.calibration_dict)
 
-    # Verification
+    # Verification. verify_calibration_file_usage only sees what is still in
+    # the folder, and handle_unused_calibration_files has already emptied it of
+    # everything the mapping does not reference, so on its own it reports an
+    # all-clear for exactly the channels that failed to match.
     missing_params = check_required_calibration_params(calibration_dict)
-    unused_files = verify_calibration_file_usage(calibration_dict, single_cal_output)
+    remaining = verify_calibration_file_usage(calibration_dict, single_cal_output)
+    unused_files = list(moved_aside) + [f for f in remaining if f not in moved_aside]
 
     return {
         "mapping_dict": mapping_dict,
@@ -1653,6 +1874,7 @@ def generate_standardized_cal_mapping(
     verify_start_time=False,
     file_time_start=None,
     file_time_end=None,
+    tolerances=None,
 ):
     """Run the full calibration pipeline: raw config extraction, calibration
     standardization, channel-to-calibration mapping, and verification.
@@ -1718,6 +1940,8 @@ def generate_standardized_cal_mapping(
         conflict_resolution: Strategy when a raw channel matches multiple
             calibration files.  ``"interactive"`` prompts the user to choose;
             ``"error"`` raises a ValueError listing the conflicts (default).
+        tolerances: Per-field match tolerances, passed through to
+            :func:`build_calibration_mapping`.
         verbose: If True, print progress information (default True).
         verify_start_time: Forwarded to process_raw_folder. If True, EK80 files
             are additionally read with the full SimradFileReader to verify
@@ -1784,4 +2008,5 @@ def generate_standardized_cal_mapping(
         keep_unused=keep_unused,
         short_filenames=short_filenames,
         verbose=verbose,
+        tolerances=tolerances,
     )
