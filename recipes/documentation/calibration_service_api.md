@@ -1,9 +1,12 @@
 # Calibration Service API
 
-A two-call interface for standardizing manufacturer calibration files and
-mapping them onto raw echosounder channels. It is shaped so that a stateless
-server and a local CLI user run the same code path: the data a browser client
-edits is an ordinary recipe input, not a file only a local user can reach.
+Three calls that turn manufacturer calibration files into a mapping from raw
+echosounder channels to the calibration that applies to them, and then archive
+the result.
+
+It is shaped so that a stateless server and a local CLI user run the same code
+path: the data a browser client edits is an ordinary recipe input, not a file
+only a local user can reach.
 
 The HTTP layer described here **does not exist yet**. What is built and tested
 is the recipe interface underneath it, so the endpoints below are a proposed
@@ -13,23 +16,38 @@ this document was generated from the running code rather than written by hand.
 For how to deploy and configure the service, see
 [cloud_run_deployment.md](cloud_run_deployment.md).
 
-## Why two calls
+## At a glance
+
+| Call | Recipe | What it does | Cost |
+| --- | --- | --- | --- |
+| `POST /calibration/standardize` | [calibration_standardize.yaml](calibration_standardize.yaml) | Parses the manufacturer files into one standardized record per channel and returns them for review. | Minutes. Scans every raw file in the window. |
+| `POST /calibration/mapping` | [calibration_mapping.yaml](calibration_mapping.yaml) | Matches raw channels against the reviewed records. Reports ambiguity instead of guessing. Called again with the user's choices until nothing is ambiguous. | Seconds, with the scan cached. |
+| `POST /calibration/archive` | [save_calibration.yaml](save_calibration.yaml) | Writes the finished calibration to a directory the survey keeps. | Seconds. |
+
+The three recipes sit next to this document. There is no server-side logic
+above them: an endpoint is one recipe run through `api.execute`, so the recipe
+file is the authoritative list of what a call accepts and returns, and the
+tables below describe the same fields. They carry RL2307 defaults, which is the
+survey every example here is drawn from; point the input folders elsewhere for
+another cruise.
+
+## Why three calls
 
 Duplicate calibration files are only detectable at mapping time, and a person
-has to choose between them: two calibrations of the same transducer on the
-same day often differ only in a parameter such as transmit power. That
-decision cannot be made before the run, and it cannot be made by the server.
+has to choose between them: two calibrations of the same transducer on the same
+day often differ only in a parameter such as transmit power. That decision
+cannot be made before the run, and it cannot be made by the server.
 
-So the pipeline splits where the human belongs. Phase 1 parses the
-manufacturer `.cal` / `.xml` files into one standardized record per channel and
-returns them for review. Phase 2 matches raw file channels against those
-records and reports any ambiguity instead of guessing.
+So the pipeline splits where the human belongs. Between call 1 and call 2 the
+user edits values, corrects dates, and discards channels. The edited set comes
+back as an input to call 2, which rewrites the calibration folder from it before
+mapping. That is what makes the pipeline work in a container that starts with an
+empty disk, and it is why the archived files always match what was actually
+mapped.
 
-Between the two, the user edits values, corrects dates, and discards channels.
-The edited set comes back as an input to phase 2, which rewrites the
-calibration folder from it before mapping. That is what makes the pipeline work
-in a container that starts with an empty disk, and it is why the archived files
-always match what was actually mapped.
+Call 3 exists because the first two write into a directory that does not
+outlive the request. Everything the survey keeps has to be written somewhere the
+caller names.
 
 ## End to end
 
@@ -39,10 +57,11 @@ sequenceDiagram
     participant B as Browser client
     participant S as Calibration service
     participant G as GCS cache
+    participant A as Archive prefix
 
     B->>S: POST /calibration/standardize
     activate S
-    Note over S: scan_raw_config, one per raw file<br/>standardize_cal writes one .yaml per channel
+    Note over S: one scan per raw file,<br/>one .yaml per channel
     S->>G: checkpoint every scanned file
     S-->>B: 200 { single_channel_data }
     deactivate S
@@ -52,44 +71,45 @@ sequenceDiagram
     B->>S: POST /calibration/mapping + override_channels
     activate S
     G-->>S: cache hit, raw scan skipped
-    Note over S: standardize_cal rebuilds the folder<br/>from override_channels<br/>build_cal_mapping matches
+    Note over S: folder rebuilt from override_channels,<br/>then matched
     S-->>B: 200 { conflicts }
     deactivate S
 
     Note over B: user picks a winner<br/>per conflict
 
     B->>S: POST /calibration/mapping + calibration_choices
-    S-->>B: 200 { mapping_dict, conflicts: {} }
+    S-->>B: 200 { mapping_dict, conflicts: {}, provenance }
+
+    Note over B: user checks provenance:<br/>what was applied where, and why
+
+    B->>S: POST /calibration/archive + archive_dir
+    activate S
+    S->>A: mapping, provenance, one file per channel
+    S-->>B: 200 { files_written }
+    deactivate S
 ```
 
-Both calls are synchronous: one HTTP request runs one recipe through
+Every call is synchronous: one HTTP request runs one recipe through
 `api.execute` and returns its outputs.
 
-Phase 1 is the long one, and it is bounded by a hard 60 minute request ceiling
-on Cloud Run. What makes that acceptable is that `scan_raw_config` checkpoints
-every file it reads, content-addressed by that file's path. A request that
-times out has still banked everything it scanned, so calling the same endpoint
-again resumes rather than starting over. Treat a timeout as "call it again",
-not as a failure, and keep the time window narrow enough that the first call
-finishes. See [cloud_run_deployment.md](cloud_run_deployment.md) for the
-sizing.
-
-The cache hit in the middle is the point of the split. RL2307 is 5,763 raw
+**The cache hit in the middle is the point of the split.** RL2307 is 5,763 raw
 files across 5.54 TiB, and scanning them is the entire cost of the pipeline.
-Phase 2 reuses phase 1's scan because both recipes declare those four steps
+Call 2 reuses call 1's scan because both recipes declare those four steps
 identically, and cache entries are addressed by step hash. If the two recipe
-files ever drift, phase 2 silently re-reads every file; a test asserts they
+files ever drift, call 2 silently re-reads every file; a test asserts they
 match.
+
+**Treat a timeout on call 1 as "call it again".** It is bounded by a hard 60
+minute request ceiling on Cloud Run, but every file it reads is checkpointed as
+it goes, content-addressed by that file's path. A request that times out has
+still banked everything it scanned, so the same request sent again resumes
+rather than starting over. See
+[cloud_run_deployment.md](cloud_run_deployment.md) for sizing.
 
 ## POST /calibration/standardize
 
-Parses the manufacturer calibration files and returns the standardized
-channels for review. Synchronous, and the expensive call: it scans every raw
-file in the window for its channel configuration.
-
-If the request times out, call it again with the same body. Every file already
-scanned is checkpointed, so the second call resumes and only pays for what is
-left.
+Parses the manufacturer calibration files and returns the standardized channels
+for review.
 
 ### Request
 
@@ -118,17 +138,15 @@ left.
 | --- | --- | --- |
 | `single_channel_data` | object | `{"channels": [...]}`, one entry per standardized channel. This is what the user reviews. See [Channel object](#channel-object). |
 | `single_channel_dir` | string | Where the files were written inside the container. Useful in logs; the client cannot read it. |
-| `raw_file_configs` | array | Scanned channel configuration of every raw file in the window. |
+| `raw_file_configs` | array | Scanned channel configuration of every raw file in the window. One entry per file, so it is large for a full survey; omit it from the response unless the client has a use for it. |
 
 ```json
 {
   "single_channel_data": {
     "channels": [
-      { "_calibration_file_key": "2024-11-12__18000__config-1",  "...": "..." },
-      { "_calibration_file_key": "2024-11-12__38000__config-1",  "...": "..." },
-      { "_calibration_file_key": "2024-11-12__70000__config-1",  "...": "..." },
-      { "_calibration_file_key": "2024-11-12__120000__config-1", "...": "..." },
-      { "_calibration_file_key": "2024-11-12__200000__config-1", "...": "..." }
+      { "_calibration_file_key": "2024-11-12__18000__config-1",  "...": "see Channel object" },
+      { "_calibration_file_key": "2024-11-12__38000__config-1",  "...": "see Channel object" },
+      { "_calibration_file_key": "2024-11-12__120000__config-1", "...": "see Channel object" }
     ]
   }
 }
@@ -136,41 +154,57 @@ left.
 
 ## POST /calibration/mapping
 
-Matches each raw channel to its calibration and writes the mapping files.
-Synchronous. Takes every field from `/calibration/standardize`, plus the three
-below.
+Matches each raw channel to its calibration. Takes every field from
+`/calibration/standardize`, plus the three below.
 
 ### Request
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `override_channels` | object | no | The reviewed channels, in the exact shape `single_channel_data` came back in. Omit an entry to discard that channel; edit values in place to correct them. Omitting the field entirely re-parses the manufacturer files. |
-| `conflict_resolution` | string | no | `"report"` (default) returns conflicts and writes nothing. `"error"` raises. `"interactive"` prompts on a terminal and must never be used from a server. |
 | `calibration_choices` | object | no | `{conflict_id: chosen_cal_key}` from a previous response. A partial map resolves what it covers and reports the rest. |
+| `conflict_resolution` | string | no | Pin this to `"report"` server side, as the handler in the deployment guide does. `"report"` returns conflicts and writes nothing. `"error"` raises. `"interactive"` prompts on a terminal and must never reach a server. The recipe's own default is `"interactive"`, for local use. |
 
-### Response when conflicts are outstanding
+### Response fields
 
-`conflicts` is non-empty and **no mapping file was written**. Present the
-choices and call again.
+Returned on both branches.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `conflicts` | object | Unresolved ambiguity. Empty when a mapping was written. See [Conflict object](#conflict-object). |
+| `mapping_dict` | object | `{raw filename: {channel_id: cal_key}}`. Empty while a conflict stands. |
+| `calibration_dict` | object | The calibration values behind each key in the mapping. Empty while a conflict stands. |
+| `single_channel_data` | object | The channel set the mapping was built from, carrying its final file keys. |
+| `provenance` | object | What calibration was applied over which stretch of the survey, and why, per channel. See [Provenance object](#provenance-object). |
+| `provenance_path` | string | Where the same report was written as YAML inside the container. Useful in logs; the client cannot read it, and does not need to, because `provenance` is the same content. |
+
+### When conflicts are outstanding
+
+`conflicts` is non-empty and **no mapping file was written**. This is a normal,
+successful response, not a failure. Branch on `conflicts`.
 
 ```json
 {
   "conflicts": { "conflict-5d656d295b1d": { "...": "see Conflict object" } },
   "mapping_dict": {},
   "calibration_dict": {},
-  "single_channel_data": { "channels": [] }
+  "single_channel_data": { "channels": [{ "...": "see Channel object" }] },
+  "provenance": { "...": "see Provenance object" },
+  "provenance_path": "/tmp/8f3c.../outputs/calibration/mapping_files/calibration_provenance.yaml"
 }
 ```
 
-An empty `mapping_dict` with a non-empty `conflicts` is a normal, successful
-response, not a failure. Branch on `conflicts`.
+`provenance` comes back here too, with the contested channels carrying
+`"status": "multiple_matches"` and the stretch of the survey each decision
+covers. It is the time ranges, not the conflict payload, that tell the user how
+much data a choice affects.
 
-`single_channel_data` is on this response too, and the client needs it: it is
-the channel set the conflicts were computed against, and the only place the
-full records for the candidates can be found. `calibration_dict` is empty here.
-See [Comparing candidates](#comparing-candidates).
+`single_channel_data` is on this response and the client needs it: it is the
+channel set the conflicts were computed against, and the only place the full
+records for the candidates can be found, because `calibration_dict` is empty
+here. See [Comparing candidates](#comparing-candidates).
 
-### Response when complete
+### When complete
 
 ```json
 {
@@ -183,12 +217,134 @@ See [Comparing candidates](#comparing-candidates).
   "calibration_dict": {
     "2023-06-27__38000__config-1": { "...": "the calibration values" }
   },
-  "single_channel_data": { "channels": [] }
+  "single_channel_data": { "channels": [{ "...": "see Channel object" }] },
+  "provenance": { "...": "see Provenance object" },
+  "provenance_path": "/tmp/8f3c.../outputs/calibration/mapping_files/calibration_provenance.yaml"
 }
 ```
 
-`single_channel_data` on this response is what was actually mapped, carrying
-the final file keys after any edits were applied.
+An empty `conflicts` means a mapping was written, not that every channel got a
+calibration. A channel that matched nothing is not an error here, and
+`mapping_dict` simply has no entry for it. `provenance` is where that shows up.
+
+### Resolving conflicts
+
+There is no separate resolution endpoint. The client re-sends the same request
+with one field added.
+
+```json
+{
+  "raw_input_folder": "gs://...",
+  "cal_input_folder": "gs://...",
+  "override_channels": { "channels": [] },
+  "calibration_choices": {
+    "conflict-5d656d295b1d": "2023-06-27__38000__config-1"
+  }
+}
+```
+
+Three rules the client must follow.
+
+1. **Resend `override_channels` unchanged.** Call 2 rebuilds the calibration
+   folder from it before mapping. Omit it and the manufacturer files are
+   re-parsed, losing the user's edits, and the conflict ids change with the
+   filenames they are derived from.
+2. **Accumulate choices, do not replace them.** Each call carries every decision
+   made so far. A choice map that drops an earlier decision leaves that conflict
+   unresolved again.
+3. **Loop until `conflicts` is empty.** Partial maps are supported: send two of
+   five decisions and the other three come back. Only when `conflicts` is `{}`
+   has a mapping been written.
+
+On the server side, the winner replaces the losing keys throughout
+`mapping_dict`, and each loser's file moves to `unused_calibration_files/`
+rather than being deleted. A key that loses one conflict but is still a
+candidate in an undecided one is left alone until that conflict is settled too.
+
+## POST /calibration/archive
+
+Writes the finished calibration to a directory the caller names, so it outlives
+the run. Quick: a handful of small YAML files, and it reads nothing.
+
+Everything is rendered from the data the previous calls returned, so the server
+needs nothing left over from them. Send the three fields back as they came.
+
+### Request
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `archive_dir` | string | yes | Directory to write the archive into. A local path, or a `gs://` URL. Refused when it is not empty. |
+| `mapping_dict` | object | no | From the mapping response, unchanged. Read from the run's own outputs folder when omitted, which only a local run can rely on. |
+| `provenance` | object | no | From the mapping response, unchanged. |
+| `single_channel_data` | object | no | From the mapping response, unchanged: it carries the file keys `mapping_dict` refers to. |
+| `overwrite` | boolean | no | Replace an archive already in `archive_dir`. Default `false`. |
+| `output_base` | string | no | Calibration outputs folder to read the three fields above from when they are omitted. Defaults to the folder this run wrote. A local convenience; a server supplies the data instead and never sets it. |
+
+```json
+{
+  "archive_dir": "gs://ggn-nmfs-aa-prod-1-data/HDD/Reuben_Lasker/RL2307/EK80/Calibration/archive",
+  "mapping_dict": { "...": "from the mapping response" },
+  "provenance": { "...": "from the mapping response" },
+  "single_channel_data": { "...": "from the mapping response" }
+}
+```
+
+### Response
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `archive_dir` | string | The directory that was written. |
+| `mapping_path` | string | Full path of the archived `channel_mapping.yaml`. |
+| `provenance_path` | string | Full path of the archived `calibration_provenance.yaml`. Unlike the mapping call's field of the same name, this one points at a file that outlives the request. |
+| `reports_dir` | string | The `Standardized_Reports` folder holding the channel files. |
+| `channel_count` | integer | How many channel files were written. |
+| `files_written` | array | Every path written, in write order. |
+
+```json
+{
+  "archive_dir": "gs://.../Calibration/archive",
+  "mapping_path": "gs://.../Calibration/archive/channel_mapping.yaml",
+  "provenance_path": "gs://.../Calibration/archive/calibration_provenance.yaml",
+  "reports_dir": "gs://.../Calibration/archive/Standardized_Reports",
+  "channel_count": 10,
+  "files_written": ["...", "..."]
+}
+```
+
+### What the archive holds
+
+```
+<archive_dir>/
+    channel_mapping.yaml
+    calibration_provenance.yaml
+    Standardized_Reports/
+        2023-06-27__38000__config-1.yaml
+        ...
+```
+
+`Standardized_Reports/` holds the same per-channel files a local run writes to
+`single_channel_calibration_files/`, rendered by the same code. They are named
+by each channel's file key, which is exactly what `channel_mapping.yaml` refers
+to, so the archive resolves against itself years later with nothing else around.
+The bytes do not depend on where the archive went: a copy written to a folder
+and a copy written to a bucket are identical, so either can be checksummed
+against the other.
+
+### What it refuses
+
+An archive that looks complete and is not is worse than a failed call, so these
+are refused. Nothing is written when one fires.
+
+- an `archive_dir` that is not empty, unless `overwrite` is set;
+- an empty `mapping_dict`, which is what the mapping call returns while
+  conflicts are outstanding;
+- a `mapping_dict` naming a calibration file that `single_channel_data` does not
+  carry, which means the two came from different mapping runs;
+- a channel whose file key is missing, shared with another channel, or not a
+  plain file name. The key becomes a filename, so it is checked rather than
+  trusted: a key carrying a path separator would write outside `archive_dir`,
+  and two channels sharing a key would write one over the other and report both
+  as archived.
 
 ## Channel object
 
@@ -206,7 +362,6 @@ required; every other field may be `null`. Abridged from a real generated file:
   "record_created": "2026-08-13T20:27:05.864939+00:00",
   "record_author": "Brett Layman",
   "transceiver_id": "400517",
-  "transceiver_model": "TransceiverTypeWBT",
   "transducer_model": "ES120-7C",
   "transducer_serial_number": null,
   "pulse_form": "0",
@@ -219,20 +374,16 @@ required; every other field may be `null`. Abridged from a real generated file:
   "sound_speed_indicative": 1492.36,
   "temperature": 12.0,
   "salinity": 32.0,
-  "acidity": 8.0,
   "sample_interval": 4e-05,
   "beam_type": "BeamTypeSplit",
   "sphere_diameter": 38.1,
   "sphere_material": "tungsten carbide",
   "sonar_software_name": "EK80",
-  "sonar_software_version": "23.6.0.0",
   "equivalent_beam_angle": -20.7,
   "gain_correction": [27.05],
   "sa_correction": [-0.1274],
   "beamwidth_transmit_major": [6.45],
-  "beamwidth_receive_major": [6.45],
-  "echoangle_major": [-0.05],
-  "echoangle_minor": [0.07]
+  "echoangle_major": [-0.05]
 }
 ```
 
@@ -277,7 +428,8 @@ filename: date alone would show the user two identical-looking options.
       {
         "cal_key": "2023-06-27__38000__config-2",
         "source_filenames": ["CalibrationDataFile-D20230627-T194512-38kHz.xml"],
-        "transmit_power": 1000.0
+        "transmit_power": 1000.0,
+        "...": "the rest identical to config-1"
       }
     ],
     "distinguishing_fields": ["sphere_diameter", "gain_correction"],
@@ -340,54 +492,211 @@ arrays on an FM channel, so they want summarizing rather than a value-by-value
 diff.
 
 **Join against the `single_channel_data` on the same response, not the one from
-phase 1.** Eight fields feed the filename stem that becomes a calibration key:
+call 1.** Eight fields feed the filename stem that becomes a calibration key:
 `calibration_date`, `channel`, `transducer_serial_number`, `pulse_form`,
 `transmit_duration_nominal`, `transmit_power`, `frequency_start` and
-`frequency_end`. If the user edited any of them during review, phase 2
-re-derives the stems and the phase 1 keys no longer match.
+`frequency_end`. If the user edited any of them during review, call 2 re-derives
+the stems and the call 1 keys no longer match.
 
 `distinguishing_fields` is empty in two cases that mean different things: the
 candidates really are identical everywhere that matters, or one candidate's
 record was not loaded. Fall back to showing the summaries and the source
 filenames rather than telling the user nothing differs.
 
-## Resolving conflicts
+## Provenance object
 
-There is no separate resolution endpoint. The client re-sends the same request
-with one field added.
+The check a user runs before trusting the mapping: for every channel, what
+calibration was applied over which stretch of the survey, and why. Returned on
+both mapping responses under `provenance`, and archived as
+`calibration_provenance.yaml`.
+
+`mapping_dict` answers "which calibration key", one raw file at a time, and for
+a cruise of several thousand files that is too much to read and still says
+nothing about the channels it has no entry for. Provenance answers "was this
+right", and collapses to something a person can actually check.
+
+### Segments
+
+Consecutive raw files whose channels behaved identically collapse into one
+**segment** carrying a time range. A cruise of thousands of files reports as a
+handful of segments per channel, and a segment breaks wherever the answer
+changes: a different calibration, a changed sounder setting, a multiplexing
+warning, or a gap where the channel was absent from a file.
 
 ```json
 {
-  "raw_input_folder": "gs://...",
-  "cal_input_folder": "gs://...",
-  "override_channels": { "channels": [] },
-  "calibration_choices": {
-    "conflict-5d656d295b1d": "2023-06-27__38000__config-1"
+  "schema_version": "1",
+  "generated": "2026-09-14T21:36:38.555063+00:00",
+  "cruise_id": "RL2307",
+  "summary": {
+    "raw_files": 4,
+    "time_start": "2023-07-17T16:30:46",
+    "time_end": "2023-07-18T19:50:19",
+    "channels_total": 4,
+    "channels_matched": 1,
+    "channels_matched_under_override": 2,
+    "channels_unmatched": 1,
+    "channels_multiple_matches": 0,
+    "channels_multiplexed": 0,
+    "calibration_files_loaded": 1,
+    "calibration_files_used": 1
+  },
+  "tolerances": {
+    "defaults":   { "transmit_power": 1.0, "...": "..." },
+    "applied":    { "transmit_power": 1001.0, "...": "..." },
+    "overridden": { "transmit_power": { "default": 1.0, "applied": 1001.0, "units": "W" } }
+  },
+  "unmatched_channel_policy": { "unmapped_channels": "warn", "effect": "..." },
+  "outcomes": { "calibration_applied": "The matched calibration was applied. ..." },
+  "channels": {
+    "WBT 987763-15 ES38-7_ES": {
+      "frequency_hz": 38000.0,
+      "transducer_model": "ES38-7",
+      "transceiver_id": "987763",
+      "segments": [ { "...": "see below" } ]
+    }
+  },
+  "calibration_files": {
+    "2023-06-27__38000__config-1": {
+      "channel": "ES38-7 Serial No: 337",
+      "calibration_date": "2023-06-27",
+      "measured_at": { "transmit_power": 1000.0, "...": "..." },
+      "source_filenames": ["CalibrationDataFile-D20230627-T181441-38kHz.xml"]
+    }
   }
 }
 ```
 
-Three rules the client must follow.
+Two blocks are there so a client never has to hardcode wording:
+`unmatched_channel_policy.effect` spells out what actually happened to an
+unmatched channel under the policy in force, and `outcomes` is a glossary of
+every `outcome` token in the report, carried once rather than on every segment.
 
-1. **Resend `override_channels` unchanged.** Phase 2 rebuilds the calibration
-   folder from it before mapping. Omit it and the manufacturer files are
-   re-parsed, losing the user's edits, and the conflict ids change with the
-   filenames they are derived from.
-2. **Accumulate choices, do not replace them.** Each call carries every
-   decision made so far. A choice map that drops an earlier decision leaves
-   that conflict unresolved again.
-3. **Loop until `conflicts` is empty.** Partial maps are supported: send two of
-   five decisions and the other three come back. Only when `conflicts` is `{}`
-   has a mapping file been written.
+### Segment statuses
 
-On the server side, the winner replaces the losing keys throughout
-`mapping_dict`, and each loser's file moves to `unused_calibration_files/`
-rather than being deleted. A key that loses one conflict but is still a
-candidate in an undecided one is left alone until that conflict is settled too.
+| `status` | `outcome` | What it means |
+| --- | --- | --- |
+| `matched` | `calibration_applied` | A calibration matched on every field, within the default tolerances. Nothing to check. |
+| `matched_under_widened_tolerance` | `calibration_applied_under_override` | A calibration was applied, but only because a tolerance was widened. It was measured at a different setting than it is being applied to, so its gain and `sa_correction` carry a bias of that difference. |
+| `unmatched` | `fallback_to_raw_file_values` or `run_stopped` | No calibration matched. Which outcome appears depends on the `unmapped_channels` policy of the step that consumes the mapping, echoed in `unmatched_channel_policy`. |
+| `multiple_matches` | `conflict_unresolved` | Several calibrations matched. Carries `candidate_calibration_keys`; the matching entry in `conflicts` is what the user answers. |
+
+Beyond the time range and the calibration key, a `matched` segment carries only
+`raw_settings` and `calibration_settings`, because those two blocks agreeing is
+the whole story. Every other status adds a `reason` sentence and the field-level
+detail behind it.
+
+An `unmatched` segment names the calibration that got closest and the field it
+failed on, so the user can see it was the right transducer and only the setting
+was wrong:
+
+```json
+{
+  "status": "unmatched",
+  "outcome": "fallback_to_raw_file_values",
+  "calibration_key": null,
+  "raw_files": 1,
+  "time_start": "2023-07-18T04:10:22",
+  "time_end": "2023-07-18T04:31:10",
+  "raw_settings": { "transmit_duration_nominal": 0.000256, "...": "..." },
+  "candidates_rejected_at": { "transmit_duration_nominal": 1 },
+  "failed_on": "transmit_duration_nominal",
+  "closest_calibration": "ES38-7 Serial No: 337",
+  "comparison": {
+    "transducer_model": { "raw": "ES38-7", "calibration": "ES38-7", "matched": true },
+    "transmit_duration_nominal": {
+      "raw": 0.000256, "calibration": 0.001024, "matched": false,
+      "tolerance": 1e-06, "units": "s", "difference": 0.000768
+    },
+    "...": "..."
+  },
+  "reason": "transmit_duration_nominal differs by 0.000768 s: these files run at 0.000256 s and the closest calibration was measured at 0.001024 s, against a tolerance of 1e-06 s."
+}
+```
+
+`candidates_rejected_at` counts how many calibration records fell out at each
+step of the match, which separates "the right transducer at the wrong setting"
+from "no record for this transducer at all".
+
+A segment that needed a widened tolerance carries `matched_only_under_override`
+naming the fields, and `override_details` with the applied tolerance beside the
+default it replaced:
+
+```json
+{
+  "status": "matched_under_widened_tolerance",
+  "outcome": "calibration_applied_under_override",
+  "calibration_key": "2023-06-27__38000__config-1",
+  "raw_files": 2,
+  "time_start": "2023-07-17T16:30:46",
+  "time_end": "2023-07-17T17:12:22",
+  "matched_only_under_override": ["transmit_power"],
+  "reason": "transmit_power differs by 1000 W, which the widened tolerance of 1001 W admits and the default 1 W would not.",
+  "override_details": {
+    "transmit_power": {
+      "raw": 2000.0, "calibration": 1000.0, "matched": true,
+      "tolerance": 1001.0, "units": "W", "difference": 1000.0,
+      "matched_only_under_override": true, "default_tolerance": 1.0
+    }
+  }
+}
+```
+
+This status only arises when the deployment passes match tolerances to the
+mapping step. `calibration_mapping.yaml` does not, so against that recipe
+`tolerances.overridden` is `{}` and every match is exact. A survey that changed
+a setting mid-cruise with no calibration for the other side of the change is the
+case for wiring it through, and the report is what makes the consequence visible
+afterwards.
+
+### Checking it
+
+The summary alone answers the question most of the time:
+
+```js
+const s = provenance.summary;
+const clean = s.channels_matched === s.channels_total;
+```
+
+When it is not clean, the segments say where. Anything other than `matched` is
+worth showing, and the time range is what makes it actionable, because it maps
+onto the part of the survey the user actually cares about:
+
+```js
+const flagged = Object.entries(provenance.channels).flatMap(
+  ([channelId, channel]) => channel.segments
+    .filter(seg => seg.status !== "matched" || seg.multiplexing)
+    .map(seg => ({
+      channelId,
+      status: seg.status,
+      files: seg.raw_files,
+      from: seg.time_start,
+      to: seg.time_end,
+      why: seg.reason || seg.multiplexing,
+    }))
+);
+```
+
+Two things worth surfacing rather than hiding:
+
+- **A fallback is silent downstream.** Under `unmapped_channels: warn` the run
+  succeeds and the Sv is computed from whatever the raw file recorded, which is
+  what echopype would use with no calibration at all. Nothing later in the
+  pipeline distinguishes that data from properly calibrated data, so this report
+  is the only place it is written down.
+- **The report is complete even when the run is not.** It is built at mapping
+  time from the scanned channel configurations, so it covers every raw file in
+  the window whether or not anything downstream has processed them yet.
+
+`channels_multiplexed` counts channels the matcher flagged as multiplexed.
+Multiplexing does not stop a match, so such a segment can still be `matched`;
+what marks it is a `multiplexing` note naming the warning, and the calibration
+may not be valid for those pings. It is the one flag that does not show up in
+the status, which is why the filter above tests for it separately.
 
 ## Errors
 
-The recipe raises ordinary Python exceptions. The status codes below are a
+The recipes raise ordinary Python exceptions. The status codes below are a
 suggested mapping for the wrapper, not existing behaviour.
 
 | Condition | Suggested | Detail |
@@ -398,27 +707,56 @@ suggested mapping for the wrapper, not existing behaviour.
 | Bad `conflict_resolution` | 400 | Only `"error"`, `"interactive"` and `"report"` are accepted. |
 | No calibration files found | 404 | `FileNotFoundError` from an empty or wrong `cal_input_folder`. |
 | `interactive` without a terminal | 500 | Guard against this in the wrapper. It raises before moving any file, but a server should never send it. |
+| Archive directory not empty | 409 | `ValueError: ... is not empty`. Confirm with the user, then resend with `overwrite: true`. |
+| Archiving an empty mapping | 409 | `ValueError: mapping_dict is empty`. Conflicts are still outstanding; there is nothing to archive yet. |
+| Archive content mismatch | 400 | `ValueError: The mapping references ... not in single_channel_data`. The two fields came from different mapping runs; resend both from the same response. |
+| Bad calibration file key | 400 | `ValueError: ... cannot be used as filenames` or `... appear on more than one channel`. A key must be one plain file name, unique across channels. Resend `single_channel_data` unchanged. |
+| Malformed archive payload | 400 | `ValueError: single_channel_data must carry one dictionary per channel`, or the same for `mapping_dict`. The body is not in the shape the mapping call returned. |
 
-## Local equivalence
+## Running it locally
 
-None of this is web-only. A local user runs the same two recipes and works
+None of this is web-only. A local user runs the same three recipes and works
 with the calibration folder directly.
 
 ```bash
 aa-recipe run calibration_standardize.yaml
 # review and edit outputs/calibration/single_channel_calibration_files/
 
-aa-recipe run calibration_mapping.yaml --input conflict_resolution=error
-# lists conflicts and stops; delete the unwanted file and re-run
+aa-recipe run calibration_mapping.yaml
+# prompts per conflict; or pass --input conflict_resolution=error to have it
+# list them and stop, then delete the unwanted file and re-run
+
+# what the match actually did
+cat outputs/calibration/mapping_files/calibration_provenance.yaml
+
+# optional: keep a copy somewhere else
+aa-recipe run save_calibration.yaml --input archive_dir=./archive
 ```
 
-Locally, `conflict_resolution=error` or `interactive` is the natural mode:
-delete the unwanted file by hand, or answer a prompt. The recipe default is
-`"report"` because it is written for the server, so a local run that leaves the
-default gets a silent no-mapping result rather than the familiar error. Pass
-the flag.
+Three differences from the service:
 
-Run config is discovered per recipe as `<recipe_stem>.config.yaml`, so the two
-phase recipes pick up different files by default. Keep them identical or pass
-`--config` explicitly, or the two phases resolve to different cache roots and
-the sharing silently does not happen.
+- **Conflicts are answered at the terminal.** The recipe default is
+  `"interactive"`, which prompts. `"error"` lists them and stops so you can
+  delete the unwanted single-channel file by hand. Do not pass `"report"`
+  locally: it is the server's mode, and it returns a no-mapping result without
+  saying anything a terminal user would notice.
+- **Provenance is a file, not a response field.** Same content. The mapping step
+  also prints a short version to the terminal: the file it wrote, and one line
+  per segment that is anything other than a clean match. A run with nothing to
+  report says so in one line.
+- **Archiving is optional.** The outputs folder is already a directory on your
+  disk, so call 3 earns its place only when the archive belongs somewhere else.
+  Run locally it takes only `archive_dir` and reads the rest out of the outputs
+  folder, so none of the data the service passes around has to be assembled by
+  hand. Point it at a `gs://` prefix to push a local run's result to the bucket.
+
+**All three must resolve to the same `user_cache_dir` and `outputs_dir`.** Run
+config is discovered per recipe as `<recipe_stem>.config.yaml` next to the
+recipe, falling back to `./aa-recipe.config.yaml` and then
+`~/.config/aa-recipe/config.yaml`. The copies here ship without per-recipe
+config files, so all three fall through to the same one, which is what you
+want. If you add per-recipe configs, as the RL2307 example set does, keep them
+identical or pass `--config` explicitly. Diverge and the failure is quiet: the
+mapping call stops reusing the scan and pays for it again, and
+`save_calibration.yaml` looks for the outputs folder somewhere the other two
+never wrote.

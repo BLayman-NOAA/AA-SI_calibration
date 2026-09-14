@@ -1021,6 +1021,28 @@ def prepare_override_channels(channels):
     return prepared
 
 
+def dump_channel_yaml(channel_data):
+    """Render one standardized channel as the text of its single-channel file.
+
+    The single place the on-disk form of a channel is defined, so a channel
+    written somewhere other than the pipeline's own outputs folder (an archive
+    directory, or a bucket) comes out byte-identical to the local file.
+
+    Args:
+        channel_data: One channel dictionary. Internal ``_`` keys are dropped.
+
+    Returns:
+        str: The YAML text of the file.
+    """
+    cleaned = _strip_internal_keys(ensure_string_identifiers(channel_data))
+    return yaml.dump(
+        cleaned,
+        Dumper=_StandardizedFileDumper,
+        default_flow_style=False,
+        sort_keys=False,
+    )
+
+
 def save_single_channel_files(
     channel_dicts,
     output_dir,
@@ -1062,10 +1084,8 @@ def save_single_channel_files(
     for file_stem, channel_data in channels_by_stem.items():
         file_path = output_dir / f"{file_stem}.yaml"
 
-        channel_data_cleaned = _strip_internal_keys(ensure_string_identifiers(channel_data))
-
         with open(file_path, 'w') as f:
-            yaml.dump(channel_data_cleaned, f, Dumper=_StandardizedFileDumper, default_flow_style=False, sort_keys=False)
+            f.write(dump_channel_yaml(channel_data))
 
         saved_count += 1
 

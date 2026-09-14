@@ -56,6 +56,19 @@ from .mapping_algorithm import (
     set_record_author,
 )
 
+from .provenance import (
+    PROVENANCE_FILENAME,
+    PROVENANCE_SCHEMA_VERSION,
+    build_calibration_provenance,
+    save_calibration_provenance,
+    print_provenance_summary,
+)
+
+from .archive import (
+    REPORTS_DIRNAME,
+    save_calibration_archive,
+)
+
 from .standardized_file_lib import (
     assign_calibration_file_stems,
     single_channel_payload,
@@ -134,4 +147,15 @@ __all__ = [
     'load_calibration_templates',
     'save_multi_channel_config_with_comments',
     'check_required_fields',
+
+    # Calibration provenance
+    'PROVENANCE_FILENAME',
+    'PROVENANCE_SCHEMA_VERSION',
+    'build_calibration_provenance',
+    'save_calibration_provenance',
+    'print_provenance_summary',
+
+    # Archiving the finished calibration
+    'REPORTS_DIRNAME',
+    'save_calibration_archive',
 ]

@@ -44,6 +44,11 @@ from aa_si_calibration.standardized_file_lib import (
     print_short_key_summary,
     calibration_key_to_filename,
 )
+from aa_si_calibration.provenance import (
+    build_calibration_provenance,
+    save_calibration_provenance,
+    print_provenance_summary,
+)
 import yaml
 
 
@@ -1574,6 +1579,8 @@ def build_calibration_mapping(
     verbose=True,
     calibration_choices=None,
     tolerances=None,
+    unmapped_channels=None,
+    cruise_id=None,
 ):
     """Match each raw channel to its calibration data and save the mapping.
 
@@ -1612,6 +1619,13 @@ def build_calibration_mapping(
             decision, not a convenience: a calibration that matches only under
             a widened tolerance was not measured at the setting it is being
             applied to. Every override is reported on the terminal.
+        unmapped_channels: The policy the step that consumes this mapping runs
+            with, ``"warn"`` or ``"error"``. Informational only: it changes
+            nothing about the matching, and only lets the provenance report
+            state what happened to an unmatched channel rather than listing
+            both possibilities. Wire it to the same value the consuming
+            extract_standardized_cal_params step uses.
+        cruise_id: Recorded in the provenance report when known.
         short_filenames: If True, remap the returned dictionaries to compact
             keys.
         verbose: If True, print progress information.
@@ -1627,6 +1641,10 @@ def build_calibration_mapping(
               referenced by the mapping, including the ones this run moved
               aside (empty list means every calibration file matched a raw
               channel).
+            - provenance: Per-channel account of what calibration was applied
+              over which stretch of the cruise, and why. JSON-safe, so a server
+              can hand it straight to a client.
+            - provenance_path: Where that report was written as YAML.
     """
     if conflict_resolution not in _CONFLICT_MODES:
         raise ValueError(
@@ -1662,6 +1680,7 @@ def build_calibration_mapping(
         print(f"Loaded {len(calibration_data['channels'])} calibration channel(s) "
               f"from {single_cal_output}")
 
+    requested_tolerances = dict(tolerances) if tolerances else {}
     tolerances = _merged_tolerances(tolerances)
     result = build_mapping(
         raw_file_configs, calibration_data, tolerances=tolerances, verbose=verbose
@@ -1670,6 +1689,19 @@ def build_calibration_mapping(
     # The per-channel NO MATCH blocks above go to the step log, where an
     # unattended run never sees them. This one line reaches the terminal.
     _warn_unmatched_channels(result)
+
+    def _write_provenance():
+        """Build, save and announce the provenance report for this mapping."""
+        report = build_calibration_provenance(
+            raw_file_configs, calibration_data, result, tolerances,
+            requested_tolerances=requested_tolerances,
+            unmapped_channels=unmapped_channels,
+            cruise_id=cruise_id,
+        )
+        path = save_calibration_provenance(report, mapping_output)
+        _artifacts.record_artifact(path)
+        print_provenance_summary(report, path)
+        return report, str(path)
 
     # Runs before conflict resolution, so an "error" run has tidied the folder
     # by the time it raises.
@@ -1704,11 +1736,17 @@ def build_calibration_mapping(
             # No mapping file is written while a conflict stands, so a caller
             # cannot mistake a provisional first match for a decision.
             print_conflict_report(result, cal_files_dir=single_cal_output)
+            provenance, provenance_path = _write_provenance()
             return {
                 "mapping_dict": {},
                 "calibration_dict": {},
                 "result": result,
                 "missing_params": {},
+                # Written even though no mapping was: the conflicting channels
+                # and the stretch of cruise they cover are what a caller has to
+                # weigh before answering with calibration_choices.
+                "provenance": provenance,
+                "provenance_path": provenance_path,
                 # What this run actually moved aside. There is no mapping to
                 # check against yet, so reporting an empty list here would be
                 # an all-clear the run has not earned.
@@ -1721,6 +1759,10 @@ def build_calibration_mapping(
 
     mapping_dict = result.mapping_dict
     calibration_dict = result.calibration_dict
+
+    # Built from the pre-remap keys, which are the ones written into
+    # channel_mapping.yaml, so a key in the report resolves there.
+    provenance, provenance_path = _write_provenance()
 
     # Preview and save mapping files
     print_mapping_preview(result)
@@ -1759,6 +1801,8 @@ def build_calibration_mapping(
         # Paths are not JSON-safe, so the recipe output port maps to these.
         "unused_file_names": [Path(f).name for f in unused_files],
         "conflicts": {},
+        "provenance": provenance,
+        "provenance_path": provenance_path,
     }
 
 
@@ -1875,6 +1919,7 @@ def generate_standardized_cal_mapping(
     file_time_start=None,
     file_time_end=None,
     tolerances=None,
+    unmapped_channels=None,
 ):
     """Run the full calibration pipeline: raw config extraction, calibration
     standardization, channel-to-calibration mapping, and verification.
@@ -2009,4 +2054,6 @@ def generate_standardized_cal_mapping(
         short_filenames=short_filenames,
         verbose=verbose,
         tolerances=tolerances,
+        unmapped_channels=unmapped_channels,
+        cruise_id=global_params["cruise_id"],
     )

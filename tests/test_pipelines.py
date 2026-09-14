@@ -56,10 +56,17 @@ _GLOBAL_PARAMS = {
 
 
 class _DummyMappingResult:
+    """Stands in for a MappingResult, carrying every field its readers touch."""
+
     def __init__(self):
         self.mapping_dict = {"file.raw": {"channel-1": "cal-key-1"}}
         self.calibration_dict = {"cal-key-1": {"gain_correction": 1.0}}
         self.unmatched_channels = []
+        self.multiple_matches = []
+        self.multiplexing_warnings = []
+        self.total_channels = 1
+        self.matched_channels = 1
+        self.total_calibrations_loaded = 1
 
     def print_summary(self):
         return None
@@ -106,12 +113,14 @@ def _patch_generate_standardized_cal_mapping(monkeypatch, tmp_path):
     monkeypatch.setattr(
         calibration_module,
         "load_raw_configs",
-        lambda *_args, **_kwargs: [{"filename": "file.raw"}],
+        lambda *_args, **_kwargs: [
+            {"filename": "file.raw", "channels": [{"channel_id": "channel-1"}]}
+        ],
     )
     monkeypatch.setattr(
         calibration_module,
         "load_calibration_data_from_single_files",
-        lambda *_args, **_kwargs: {"channels": ["channel-1"]},
+        lambda *_args, **_kwargs: {"channels": [{"channel": "channel-1"}]},
     )
     monkeypatch.setattr(
         calibration_module,

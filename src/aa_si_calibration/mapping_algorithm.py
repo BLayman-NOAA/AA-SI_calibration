@@ -682,6 +682,18 @@ def get_calibration(
     return calibration_dict.get(cal_key)
 
 
+def dump_mapping_yaml(mapping_dict: Dict[str, Dict[str, str]]) -> str:
+    """Render a channel mapping as the text of channel_mapping.yaml.
+
+    Args:
+        mapping_dict: ``{raw filename: {channel_id: calibration key}}``.
+
+    Returns:
+        str: The YAML text of the mapping file.
+    """
+    return yaml.dump(mapping_dict, default_flow_style=False, sort_keys=False)
+
+
 def save_mapping_files(
     result: MappingResult,
     output_dir: str | Path,
@@ -750,7 +762,7 @@ def save_mapping_files(
     # Save mapping dictionary
     mapping_path = output_dir / mapping_filename
     with open(mapping_path, 'w') as f:
-        yaml.dump(mapping_to_save, f, default_flow_style=False, sort_keys=False)
+        f.write(dump_mapping_yaml(mapping_to_save))
     
     # Save calibration dictionary
     calibration_path = output_dir / calibration_filename

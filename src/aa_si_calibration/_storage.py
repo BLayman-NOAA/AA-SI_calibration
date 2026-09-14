@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: NOAA Fisheries
-"""Minimal local/remote storage helpers for calibration *input* folders.
+"""Minimal local/remote storage helpers for calibration inputs and archives.
 
 Remote (``gs://``) raw and calibration folders are handled at the op boundary
 only: the deep readers (``raw_reader_api``, ``simrad_reader``,
 ``manufacturer_file_parsers``) stay strictly local-filesystem code, and this
 module materializes remote inputs locally for them.
+
+The write side is deliberately narrow. The pipeline's own outputs tree is
+written with ``pathlib`` throughout, so it stays local; only ``archive``, which
+copies the finished calibration out to wherever a survey keeps it, writes to a
+location the caller chose and may therefore need a bucket.
 
 ``aa_si_calibration`` intentionally depends on neither ``aa_si_utils`` nor
 ``aa_recipe_manager``, so the handful of helpers below are deliberately
@@ -88,6 +93,86 @@ def glob_url(
     fs = get_fs(base, storage_options)
     matches = fs.glob(str(base).rstrip("/") + "/" + pattern)
     return sorted(fs.unstrip_protocol(match) for match in matches)
+
+
+def join(base: Any, *parts: str) -> Any:
+    """Join path segments under *base*, keeping a URL a URL."""
+    if is_remote(base):
+        return "/".join([str(base).rstrip("/"), *parts])
+    return Path(base).joinpath(*parts)
+
+
+def write_text(
+    destination: Any,
+    text: str,
+    storage_options: dict[str, Any] | None = None,
+) -> str:
+    """Write *text* to a local path or a remote URL, creating parents.
+
+    Encoding and line endings are pinned rather than left to the platform, so
+    the same content written to a folder and to a bucket comes out byte for
+    byte the same. An archive is compared and checksummed, and a copy that
+    differs from its twin only because Windows expanded the newlines is a copy
+    nothing can match.
+
+    Args:
+        destination: Local path or remote fsspec URL of the file to write.
+        text: The file's contents.
+        storage_options: fsspec options for a remote *destination*.
+
+    Returns:
+        str: Where the file was written.
+    """
+    if is_remote(destination):
+        fs = get_fs(destination, storage_options)
+        with fs.open(
+            str(destination), "w", encoding="utf-8", newline=""
+        ) as handle:
+            handle.write(text)
+        return str(destination)
+
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
+    return str(path)
+
+
+def is_empty_dir(
+    destination: Any,
+    storage_options: dict[str, Any] | None = None,
+) -> bool:
+    """True when *destination* holds nothing, or does not exist yet.
+
+    An object store has no empty directories, so a prefix nothing is stored
+    under is indistinguishable from one that was never created; both count as
+    empty, which is what a caller asking "is it safe to write here" means.
+    """
+    if is_remote(destination):
+        fs = get_fs(destination, storage_options)
+        try:
+            return not fs.ls(str(destination).rstrip("/"), detail=False)
+        except FileNotFoundError:
+            return True
+
+    path = Path(destination)
+    return not path.exists() or not any(path.iterdir())
+
+
+def clear_dir(
+    destination: Any,
+    storage_options: dict[str, Any] | None = None,
+) -> None:
+    """Remove *destination* and everything under it. A no-op when absent."""
+    if is_remote(destination):
+        fs = get_fs(destination, storage_options)
+        if fs.exists(str(destination).rstrip("/")):
+            fs.rm(str(destination).rstrip("/"), recursive=True)
+        return
+
+    path = Path(destination)
+    if path.exists():
+        _rmtree_local(path)
 
 
 def folder_fingerprint(
