@@ -14,17 +14,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 
 
-# Default numerical tolerances for field comparisons
-DEFAULT_TOLERANCES = {
-    'frequency': 1.0,              # Hz - exact match expected
-    'frequency_start': 1.0,        # Hz - exact match expected  
-    'frequency_end': 1.0,          # Hz - exact match expected
-    'transmit_power': 1.0,         # Watts - exact match expected
-    'transmit_duration_nominal': 1e-6,  # seconds - small tolerance for floating point
-}
-
+from .constants import DEFAULT_TOLERANCES  # noqa: F401  (re-exported)
 from .standardized_file_lib import ensure_string_identifiers as _ensure_string_identifiers
 from . import _console
+from .averaging import average_calibration_records
 
 from .standardized_file_lib import (
     build_calibration_key,
@@ -34,8 +27,11 @@ from .standardized_file_lib import (
     remap_to_short_keys,
     _strip_internal_keys,
     _StandardizedFileDumper,
+    dump_channel_yaml,
     json_safe,
+    normalize_calibration_date,
 )
+from .calibration_keys import build_average_calibration_key, join_calibration_dates
 
 
 @dataclass
@@ -77,6 +73,8 @@ class MappingResult:
         unmatched_channels: List of channels that could not be matched
         multiple_matches: List of channels with multiple matches
         multiplexing_warnings: List of multiplexing warnings
+        averaged: Maps the key of each record averaged while resolving
+            conflicts -> {source calibration key: source record}
     """
     mapping_dict: Dict[str, Dict[str, str]] = field(default_factory=dict)
     calibration_dict: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -88,6 +86,7 @@ class MappingResult:
     unmatched_channels: List[UnmatchedChannel] = field(default_factory=list)
     multiple_matches: List[MultipleMatchChannel] = field(default_factory=list)
     multiplexing_warnings: List[MultiplexingWarning] = field(default_factory=list)
+    averaged: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
 
     def print_summary(self):
         """Print a summary of the mapping results."""
@@ -470,6 +469,10 @@ def load_calibration_data_from_single_files(
         
         # Ensure string identifiers are consistent
         channel_data = _ensure_string_identifiers(channel_data)
+        if 'calibration_date' in channel_data:
+            channel_data['calibration_date'] = normalize_calibration_date(
+                channel_data['calibration_date']
+            )
 
         # Store the filename stem so the mapping can use it as the key
         channel_data['_calibration_file_key'] = yml_file.stem
@@ -694,6 +697,19 @@ def dump_mapping_yaml(mapping_dict: Dict[str, Dict[str, str]]) -> str:
     return yaml.dump(mapping_dict, default_flow_style=False, sort_keys=False)
 
 
+def keys_are_file_stems(calibration_dict: Dict[str, Dict[str, Any]]) -> bool:
+    """Whether every key is already the name of the single-channel file it came from.
+
+    Such keys must not be remapped to short keys. The remap renumbers
+    ``config-N`` over whatever survived the mapping, so a key would stop naming
+    its own file once another candidate had been moved aside.
+    """
+    return all(
+        cd.get('_calibration_file_key') == ck
+        for ck, cd in calibration_dict.items()
+    )
+
+
 def save_mapping_files(
     result: MappingResult,
     output_dir: str | Path,
@@ -733,15 +749,7 @@ def save_mapping_files(
     
     # Remap to short keys if requested
     if short_filenames:
-        # If the keys already came from single-channel filenames (i.e.
-        # _calibration_file_key matches the dict key for every entry),
-        # they are already short, skip re-remapping which would
-        # incorrectly renumber them after unused files were deleted.
-        keys_already_short = all(
-            cd.get('_calibration_file_key') == ck
-            for ck, cd in result.calibration_dict.items()
-        )
-        if keys_already_short:
+        if keys_are_file_stems(result.calibration_dict):
             mapping_to_save = result.mapping_dict
             calibration_to_save = result.calibration_dict
         else:
@@ -1111,12 +1119,73 @@ def describe_conflicts(result: MappingResult) -> dict:
     return json_safe(described)
 
 
+def _selected_keys(conflict_id: str, chosen, candidate_keys: List[str]) -> List[str]:
+    """The candidate keys one decision names, as a list."""
+    if isinstance(chosen, str):
+        selected = [chosen]
+    elif isinstance(chosen, (list, tuple)) and chosen:
+        selected = list(chosen)
+    else:
+        raise ValueError(
+            f"The choice for {conflict_id} must be a calibration key, or a list "
+            f"of keys to average, not {chosen!r}."
+        )
+    for key in selected:
+        if key not in candidate_keys:
+            raise ValueError(
+                f"{key!r} is not a candidate for {conflict_id}. "
+                f"Candidates: {', '.join(candidate_keys)}."
+            )
+    if len(set(selected)) != len(selected):
+        raise ValueError(
+            f"The choice for {conflict_id} names a calibration more than once: "
+            f"{', '.join(selected)}."
+        )
+    return selected
+
+
+def average_candidates(
+    result: MappingResult,
+    cal_keys: List[str],
+    record_author: str = None,
+    short_filenames: bool = True,
+) -> Tuple[str, Dict[str, Any]]:
+    """Average the records behind several calibration keys.
+
+    Args:
+        result: MappingResult holding the records in ``calibration_dict``.
+        cal_keys: The keys to average.
+        record_author: Recorded as the author of the averaged record.
+        short_filenames: Passed to
+            :func:`calibration_keys.build_average_calibration_key`.
+
+    Returns:
+        tuple: ``(key, record)`` for the averaged record. Nothing is written.
+
+    Raises:
+        ValueError: If a record is not loaded, or the records cannot be
+            averaged.
+    """
+    missing = [k for k in cal_keys if k not in result.calibration_dict]
+    if missing:
+        raise ValueError(
+            f"No calibration record is loaded for {', '.join(missing)}, so it "
+            f"cannot be averaged."
+        )
+    record = average_calibration_records(
+        [result.calibration_dict[k] for k in cal_keys], record_author=record_author
+    )
+    return build_average_calibration_key(record, cal_keys, short_filenames), record
+
+
 def apply_conflict_choices(
     result: MappingResult,
     choices: dict,
     cal_files_dir: str | Path = None,
     keep_unused: bool = False,
     unused_dir: str | Path = None,
+    record_author: str = None,
+    short_filenames: bool = True,
 ) -> set:
     """Resolve conflicts from a caller-supplied map of decisions.
 
@@ -1125,25 +1194,39 @@ def apply_conflict_choices(
     the rest stay on ``result.multiple_matches`` for the caller to report or
     raise on.
 
-    A calibration key is removed only once nothing still needs it: neither kept
-    by another conflict nor a candidate of one that has not been decided yet.
-    Mapping entries are rewritten per ``(filename, channel_id)``, so a channel
-    id shared by two conflicts resolves to its own group's winner.
+    A decision naming several candidates averages them. The average is written
+    as a new single-channel file, the conflict's channels are mapped to it, and
+    the candidates it was made from are set aside like any other loser. Every
+    decision is checked, and every average computed, before anything changes,
+    so a decision that cannot be honoured leaves the result and the folder as
+    they were.
+
+    A calibration key is removed only once nothing still needs it: not kept by
+    another conflict, not a candidate of one that has not been decided yet, and
+    not the calibration of a channel that matched it alone. Mapping entries are
+    rewritten per ``(filename, channel_id)``, so a channel id shared by two
+    conflicts resolves to its own group's winner.
 
     Args:
         result: MappingResult from :func:`build_mapping`, modified in place.
-        choices: ``{conflict_id: chosen calibration key}``.
+        choices: ``{conflict_id: key}`` to keep one candidate, or
+            ``{conflict_id: [key, ...]}`` to average several. A one-item list
+            is the same as the key alone.
         cal_files_dir: Directory holding the single-channel files. When None no
             file is touched and only the in-memory result changes.
         keep_unused: If True, move rejected files to *unused_dir*.
         unused_dir: Destination directory for rejected files.
+        record_author: Recorded as the author of any averaged record.
+        short_filenames: If True, an averaged record gets a compact
+            ``<dates>__<frequency>__average-<digest>`` key; otherwise the
+            digest is appended to its full calibration key.
 
     Returns:
         set: The calibration keys that were removed.
 
     Raises:
-        ValueError: For an unknown conflict id, or a choice that is not one of
-            that conflict's candidates.
+        ValueError: For an unknown conflict id, a choice that is not one of
+            that conflict's candidates, or candidates that cannot be averaged.
     """
     if not choices:
         return set()
@@ -1156,32 +1239,61 @@ def apply_conflict_choices(
             f"Valid id(s): {', '.join(sorted(groups)) or 'none'}."
         )
 
+    decisions = {}
+    averages = {}
+    for conflict_id, chosen in choices.items():
+        selected = _selected_keys(conflict_id, chosen, _candidate_keys(groups[conflict_id]))
+        if len(selected) == 1:
+            decisions[conflict_id] = selected[0]
+            continue
+        try:
+            average_key, record = average_candidates(
+                result, selected, record_author, short_filenames
+            )
+        except ValueError as err:
+            raise ValueError(f"{conflict_id}: {err}") from err
+        averages[average_key] = (selected, record)
+        decisions[conflict_id] = average_key
+
+    return _apply_decisions(
+        result, groups, decisions, averages, cal_files_dir, keep_unused, unused_dir
+    )
+
+
+def _apply_decisions(
+    result: MappingResult,
+    groups: Dict[str, List[MultipleMatchChannel]],
+    decisions: Dict[str, str],
+    averages: Dict[str, Tuple[List[str], Dict[str, Any]]],
+    cal_files_dir: str | Path = None,
+    keep_unused: bool = False,
+    unused_dir: str | Path = None,
+) -> set:
+    """Apply checked conflict decisions to the result and the folder.
+
+    Args:
+        result: MappingResult from :func:`build_mapping`, modified in place.
+        groups: The conflicts, from :func:`group_conflicts`.
+        decisions: ``{conflict_id: key to map its channels to}``, a candidate
+            or the key of an entry in *averages*.
+        averages: ``{average key: (source keys, averaged record)}``.
+        cal_files_dir: Directory holding the single-channel files, or None to
+            touch no file.
+        keep_unused: If True, move rejected files to *unused_dir*.
+        unused_dir: Destination directory for rejected files.
+
+    Returns:
+        set: The calibration keys that were removed.
+    """
     kept_keys = set()
     rejected_keys = set()
     replacement = {}
-    for conflict_id, chosen in choices.items():
+    for conflict_id, kept in decisions.items():
         channels = groups[conflict_id]
-        candidate_keys = _candidate_keys(channels)
-        if chosen not in candidate_keys:
-            raise ValueError(
-                f"{chosen!r} is not a candidate for {conflict_id}. "
-                f"Candidates: {', '.join(candidate_keys)}."
-            )
-        kept_keys.add(chosen)
-        rejected_keys.update(k for k in candidate_keys if k != chosen)
+        kept_keys.add(kept)
+        rejected_keys.update(k for k in _candidate_keys(channels) if k != kept)
         for mm in channels:
-            replacement[(mm.filename, mm.channel_id)] = chosen
-
-    # A candidate of a conflict nobody has decided yet is still needed: removing
-    # it would strip the details the next report shows and leave a choice that
-    # names a file no longer on disk.
-    still_contested = {
-        cal_key
-        for conflict_id, channels in groups.items()
-        if conflict_id not in choices
-        for cal_key in _candidate_keys(channels)
-    }
-    removable = rejected_keys - kept_keys - still_contested
+            replacement[(mm.filename, mm.channel_id)] = kept
 
     for filename, channel_ids in result.mapping_dict.items():
         for channel_id in list(channel_ids):
@@ -1189,10 +1301,37 @@ def apply_conflict_choices(
             if kept is not None:
                 channel_ids[channel_id] = kept
 
+    # A candidate of a conflict nobody has decided yet is still needed: removing
+    # it would strip the details the next report shows and leave a choice that
+    # names a file no longer on disk.
+    still_contested = {
+        cal_key
+        for conflict_id, channels in groups.items()
+        if conflict_id not in decisions
+        for cal_key in _candidate_keys(channels)
+    }
+    # So is one a channel outside these conflicts matched on its own: losing
+    # here does not stop it being that channel's calibration.
+    still_mapped = {
+        cal_key
+        for channel_ids in result.mapping_dict.values()
+        for cal_key in channel_ids.values()
+    }
+    removable = rejected_keys - kept_keys - still_contested - still_mapped
+
+    # Recorded before the sources are dropped from calibration_dict below, so
+    # the provenance report can still say what went into each average.
+    for average_key, (sources, record) in averages.items():
+        result.averaged[average_key] = {k: result.calibration_dict[k] for k in sources}
+        result.calibration_dict[average_key] = {**record, "_calibration_file_key": average_key}
+
     if cal_files_dir is not None:
         cal_files_dir = Path(cal_files_dir)
         if unused_dir is not None:
             unused_dir = Path(unused_dir)
+        for average_key, (_, record) in averages.items():
+            with open(cal_files_dir / f"{average_key}.yaml", "w") as f:
+                f.write(dump_channel_yaml(record))
         for cal_key in sorted(removable):
             cal_file = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yaml"
             if cal_file.exists():
@@ -1201,7 +1340,7 @@ def apply_conflict_choices(
     for cal_key in removable:
         result.calibration_dict.pop(cal_key, None)
 
-    resolved = {id(mm) for conflict_id in choices for mm in groups[conflict_id]}
+    resolved = {id(mm) for conflict_id in decisions for mm in groups[conflict_id]}
     result.multiple_matches[:] = [
         mm for mm in result.multiple_matches if id(mm) not in resolved
     ]
@@ -1232,11 +1371,22 @@ def _render_conflict_block(
     lines.append("Calibration file options:")
     for i, cal_key in enumerate(candidate_keys, start=1):
         cal_data = result.calibration_dict.get(cal_key, {})
-        cal_date = cal_data.get('calibration_date', 'unknown')
+        cal_date = join_calibration_dates(cal_data.get('calibration_date', 'unknown'), ', ')
         src_files = cal_data.get('source_filenames', ['unknown'])
         lines.append(f"  [{i}] {cal_key}.yaml")
         lines.append(f"      calibration_date: {cal_date}  |  source: {src_files}")
     return "\n".join(lines)
+
+
+def _parse_selection(text: str, count: int) -> Optional[List[int]]:
+    """Option indices from a typed answer such as ``2`` or ``1,3``, or None."""
+    parts = [p.strip() for p in text.split(",")]
+    if not all(p.isdigit() and 1 <= int(p) <= count for p in parts):
+        return None
+    indices = [int(p) for p in parts]
+    if len(set(indices)) != len(indices):
+        return None
+    return indices
 
 
 def resolve_conflicts_interactive(
@@ -1244,19 +1394,24 @@ def resolve_conflicts_interactive(
     cal_files_dir: str | Path,
     keep_unused: bool = False,
     unused_dir: str | Path = None,
+    record_author: str = None,
+    short_filenames: bool = True,
 ) -> None:
     """Interactively resolve multiple-match conflicts by prompting the user.
 
     When a raw channel matches more than one calibration file, this function
     groups the conflicts, presents the options, and asks the user which file
-    to keep. Rejected files are either deleted or moved depending on
-    *keep_unused*. The *result* object is modified in-place.
+    to keep, or which several to average. Rejected files are either deleted or
+    moved depending on *keep_unused*. The *result* object is modified in-place.
 
     Args:
         result: MappingResult from :func:`build_mapping` (modified in-place).
         cal_files_dir: Directory containing the single-channel ``.yaml`` files.
         keep_unused: If True, move rejected files to *unused_dir*.
         unused_dir: Destination directory for rejected files.
+        record_author: Recorded as the author of any averaged record.
+        short_filenames: Naming style for averaged records, as in
+            :func:`apply_conflict_choices`.
     """
     if not result.multiple_matches:
         return
@@ -1265,9 +1420,11 @@ def resolve_conflicts_interactive(
 
     print(f"\nConflict: {len(groups)} unique raw configuration(s) matched multiple "
           f"calibration files.")
-    print("You will be prompted to choose which file to keep for each conflict.\n")
+    print("You will be prompted to choose which file to keep for each conflict.")
+    print("Enter several numbers separated by commas to average those files instead.\n")
 
-    choices = {}
+    decisions = {}
+    averages = {}
     for conflict_num, (conflict_id, channels) in enumerate(groups.items(), start=1):
         candidate_keys = _candidate_keys(channels)
         option_block = _render_conflict_block(
@@ -1278,32 +1435,47 @@ def resolve_conflicts_interactive(
         context = option_block
         while True:
             choice = _console.prompt(
-                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP (1-{len(candidate_keys)}): ",
+                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP, OR SEVERAL SEPARATED "
+                f"BY COMMAS TO AVERAGE THEM (1-{len(candidate_keys)}): ",
                 context=context,
             ).strip()
-            if choice.isdigit() and 1 <= int(choice) <= len(candidate_keys):
-                break
-            invalid = f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND {len(candidate_keys)}."
+            indices = _parse_selection(choice, len(candidate_keys))
+            if indices is None:
+                invalid = (
+                    f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND "
+                    f"{len(candidate_keys)}, OR SEVERAL SEPARATED BY COMMAS."
+                )
+            else:
+                selected = [candidate_keys[i - 1] for i in indices]
+                if len(selected) == 1:
+                    break
+                try:
+                    average_key, record = average_candidates(
+                        result, selected, record_author, short_filenames
+                    )
+                    break
+                except ValueError as err:
+                    invalid = f"    THESE FILES CANNOT BE AVERAGED. {err}"
             print(invalid)
             # The options are already on screen; repeat only the correction.
             context = invalid
 
         # The typed answer is not echoed into the log, so record it.
         print(f"  Selected: {choice}")
-        kept_key = candidate_keys[int(choice) - 1]
-        choices[conflict_id] = kept_key
-
-        print(f"\n  Keeping: {kept_key}.yaml")
         action_word = "Moving" if keep_unused else "Deleting"
-        for rk in [k for k in candidate_keys if k != kept_key]:
-            print(f"  {action_word}: {rk}.yaml")
+        if len(selected) == 1:
+            decisions[conflict_id] = selected[0]
+            print(f"\n  Keeping: {selected[0]}.yaml")
+        else:
+            decisions[conflict_id] = average_key
+            averages[average_key] = (selected, record)
+            print(f"\n  Averaging {len(selected)} files into: {average_key}.yaml")
+        for rk in candidate_keys:
+            if len(selected) > 1 or rk not in selected:
+                print(f"  {action_word}: {rk}.yaml")
 
-    apply_conflict_choices(
-        result,
-        choices,
-        cal_files_dir=cal_files_dir,
-        keep_unused=keep_unused,
-        unused_dir=unused_dir,
+    _apply_decisions(
+        result, groups, decisions, averages, cal_files_dir, keep_unused, unused_dir
     )
 
     print("\nAll conflicts resolved.")
@@ -1327,7 +1499,7 @@ def print_conflict_report(
         print("Conflicting calibration files (keep exactly one):")
         for cal_key in _candidate_keys(channels):
             cal_data = result.calibration_dict.get(cal_key, {})
-            cal_date = cal_data.get('calibration_date', 'unknown')
+            cal_date = join_calibration_dates(cal_data.get('calibration_date', 'unknown'), ', ')
             src_files = cal_data.get('source_filenames', ['unknown'])
             print(f"  - {cal_key}.yaml")
             print(f"    calibration_date: {cal_date}  |  source: {src_files}")

@@ -76,12 +76,15 @@ def stub_pipeline(monkeypatch):
             "total_channels": 1,
             "matched_channels": 1,
             "total_calibrations_loaded": 1,
+            "averaged": {},
             "print_summary": lambda self: None,
         },
     )()
     monkeypatch.setattr(
         calibration_module, "load_calibration_data_from_single_files",
-        lambda *_a, **_k: {"channels": [{"channel": "ch-1"}]},
+        lambda *_a, **_k: {
+            "channels": [{"channel": "ch-1", "_calibration_file_key": "key-1"}]
+        },
     )
     monkeypatch.setattr(calibration_module, "build_mapping", lambda *_a, **_k: dummy)
     # Returns the files it moved aside, which the caller folds into unused_files.

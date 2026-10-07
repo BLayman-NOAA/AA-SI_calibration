@@ -67,6 +67,7 @@ class _DummyMappingResult:
         self.total_channels = 1
         self.matched_channels = 1
         self.total_calibrations_loaded = 1
+        self.averaged = {}
 
     def print_summary(self):
         return None
@@ -120,7 +121,9 @@ def _patch_generate_standardized_cal_mapping(monkeypatch, tmp_path):
     monkeypatch.setattr(
         calibration_module,
         "load_calibration_data_from_single_files",
-        lambda *_args, **_kwargs: {"channels": [{"channel": "channel-1"}]},
+        lambda *_args, **_kwargs: {
+            "channels": [{"channel": "channel-1", "_calibration_file_key": "cal-key-1"}]
+        },
     )
     monkeypatch.setattr(
         calibration_module,

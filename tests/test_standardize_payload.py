@@ -27,7 +27,7 @@ def _channel(**overrides):
     channel = {
         "channel": "ES38-7 Serial No: 337 - Narrow",
         "frequency": [38000.0],
-        "calibration_date": "2023-06-27",
+        "calibration_date": ["2023-06-27"],
         "source_filenames": ["cal_38kHz_CW.xml"],
         "transducer_model": "ES38-7",
         "transducer_serial_number": "337",
@@ -288,3 +288,34 @@ def test_supplied_overrides_change_the_fingerprint(tmp_path):
 
     assert edited != plain
     assert edited != edited_again
+
+
+# ---------------------------------------------------------------------------
+# calibration_date as a list
+# ---------------------------------------------------------------------------
+
+def test_a_string_calibration_date_reads_as_a_list(tmp_path):
+    """Files written before dates became a list still load."""
+    from aa_si_calibration.mapping_algorithm import load_calibration_data_from_single_files
+
+    (tmp_path / "quoted.yaml").write_text('channel: "a"\ncalibration_date: "7/18/2016"\n')
+    (tmp_path / "unquoted.yaml").write_text('channel: "b"\ncalibration_date: 2016-07-18\n')
+
+    channels = load_calibration_data_from_single_files(tmp_path)["channels"]
+
+    assert [c["calibration_date"] for c in channels] == [["2016-07-18"], ["2016-07-18"]]
+
+
+def test_a_single_date_key_is_unchanged_by_the_list_form():
+    """Existing file names, mapping keys and conflict ids stay as they were."""
+    assert sfl.build_calibration_key(_channel()) == sfl.build_calibration_key(
+        _channel(calibration_date="2023-06-27")
+    )
+    assert sfl.build_calibration_key(_channel()).startswith("2023-06-27__")
+
+
+def test_override_channels_accept_a_string_date():
+    """An older client sends the string form back."""
+    (prepared,) = sfl.prepare_override_channels([_channel(calibration_date="2023-06-27")])
+
+    assert prepared["calibration_date"] == ["2023-06-27"]

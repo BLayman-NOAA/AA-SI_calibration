@@ -27,6 +27,7 @@ from .mapping_algorithm import (
     find_matching_calibration,
     values_match_with_tolerance,
 )
+from .averaging import value_spread
 from .standardized_file_lib import json_safe
 from . import _console
 
@@ -594,6 +595,7 @@ def build_calibration_provenance(
         ("channels_multiplexed", multiplexed),
         ("calibration_files_loaded", result.total_calibrations_loaded),
         ("calibration_files_used", len(result.calibration_dict)),
+        ("calibration_files_averaged", len(result.averaged)),
     ])
 
     report["tolerances"] = OrderedDict([
@@ -639,22 +641,56 @@ def build_calibration_provenance(
     report["channels"] = channels
 
     report["calibration_files"] = OrderedDict(
-        (cal_key, OrderedDict([
-            ("channel", cal_data.get("channel")),
-            ("calibration_date", cal_data.get("calibration_date")),
-            (
-                "frequency_hz",
-                json_safe(
-                    cal_data.get("frequency") or cal_data.get("frequency_start")
-                ),
-            ),
-            ("measured_at", _settings(cal_data)),
-            ("source_filenames", cal_data.get("source_filenames")),
-        ]))
+        (cal_key, _calibration_file_entry(cal_data, result.averaged.get(cal_key)))
         for cal_key, cal_data in sorted(result.calibration_dict.items())
     )
 
     return json_safe(report)
+
+
+def _calibration_file_entry(cal_data, sources=None):
+    """Describe one calibration file the mapping uses.
+
+    Args:
+        cal_data: The calibration record.
+        sources: ``{key: record}`` of the calibrations it was averaged from,
+            when it is an average made by this run.
+    """
+    entry = OrderedDict([
+        ("channel", cal_data.get("channel")),
+        ("calibration_date", cal_data.get("calibration_date")),
+        (
+            "frequency_hz",
+            json_safe(cal_data.get("frequency") or cal_data.get("frequency_start")),
+        ),
+        ("measured_at", _settings(cal_data)),
+        ("source_filenames", cal_data.get("source_filenames")),
+        ("is_averaged", bool(cal_data.get("is_averaged"))),
+    ])
+    if sources:
+        records = list(sources.values())
+        # Spreads rather than every value: an FM record carries one gain per
+        # frequency point, and the largest disagreement is what a reviewer
+        # weighs when deciding whether the average was sound.
+        entry["gain_correction_spread_db"] = value_spread(records, "gain_correction")
+        entry["sa_correction_spread_db"] = value_spread(records, "sa_correction")
+        entry["averaged_from"] = [_averaged_source(key, record) for key, record in sources.items()]
+    return entry
+
+
+def _averaged_source(cal_key, record):
+    """One calibration that went into an average."""
+    source = OrderedDict([
+        ("calibration_key", cal_key),
+        ("calibration_date", record.get("calibration_date")),
+        ("source_filenames", record.get("source_filenames")),
+    ])
+    # A CW record's corrections are single values, short enough to show.
+    for field in ("gain_correction", "sa_correction"):
+        values = record.get(field)
+        if isinstance(values, list) and len(values) == 1:
+            source[field] = values[0]
+    return source
 
 
 def dump_provenance_yaml(report):

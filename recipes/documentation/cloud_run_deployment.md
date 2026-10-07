@@ -103,13 +103,12 @@ def mapping(body):
         # JSON-safe, so it goes straight into the response body.
         "provenance": out["provenance"],
         "provenance_path": out["provenance_path"],   # logs only
-        # From standardize_cal, not the mapping step, and required on both
-        # paths: when conflicts come back the mapping step returns empty
-        # dictionaries, and this is the only place the client can find the
-        # candidates' full records to compare them.
-        "single_channel_data": (
-            result.outputs["standardize_cal"]["single_channel_data"]
-        ),
+        # Required on both paths: when conflicts come back the mapping step
+        # returns empty dictionaries, and this is the only place the client
+        # can find the candidates' full records to compare them. Taken from
+        # the mapping step, not standardize_cal, because it also carries any
+        # record averaged from a list choice, which the archive call needs.
+        "single_channel_data": out["single_channel_data"],
     }
 
 

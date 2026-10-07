@@ -49,12 +49,15 @@ from .mapping_algorithm import (
     group_conflicts,
     describe_conflicts,
     apply_conflict_choices,
+    average_candidates,
     print_conflict_report,
     check_required_calibration_params,
     verify_calibration_file_usage,
     verify_mapping_covers_raw_files,
     set_record_author,
 )
+
+from .averaging import average_calibration_records
 
 from .provenance import (
     PROVENANCE_FILENAME,
@@ -137,6 +140,8 @@ __all__ = [
     'group_conflicts',
     'describe_conflicts',
     'apply_conflict_choices',
+    'average_candidates',
+    'average_calibration_records',
     'print_conflict_report',
     'check_required_calibration_params',
     'verify_calibration_file_usage',

@@ -29,6 +29,15 @@ PULSE_FORM_FM = "1"
 # Placeholder for unknown transducer serial numbers
 TRANSDUCER_SERIAL_UNKNOWN = "NoSN"
 
+# Default numerical tolerances for field comparisons
+DEFAULT_TOLERANCES = {
+    'frequency': 1.0,              # Hz - exact match expected
+    'frequency_start': 1.0,        # Hz - exact match expected
+    'frequency_end': 1.0,          # Hz - exact match expected
+    'transmit_power': 1.0,         # Watts - exact match expected
+    'transmit_duration_nominal': 1e-6,  # seconds - small tolerance for floating point
+}
+
 # Calibration flags file
 FLAGS_FILENAME = "calibration_flags.json"
 FLAG_CATEGORIES = [

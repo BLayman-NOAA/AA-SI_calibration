@@ -209,14 +209,31 @@
 		},
 		"calibration_date": {
 			"type": [
-				"string",
+				"array",
 				"null"
 			],
-			"title": "Calibration date",
-			"description": "Date associated with the calibration measurements. Derived from calibration report files, so format is free-form.",
+			"title": "Calibration dates",
+			"description": "Dates of the calibration measurements behind this record. One entry for a single calibration, and one per contributing calibration when the record is an average. Derived from calibration report files and converted to YYYY-MM-DD where the format is recognized, otherwise kept as written.",
+			"items": {
+				"type": "string"
+			},
 			"examples": [
-				"7/18/2016"
+				[
+					"2016-07-18"
+				],
+				[
+					"2023-06-27",
+					"2023-08-14"
+				]
 			]
+		},
+		"is_averaged": {
+			"type": [
+				"boolean",
+				"null"
+			],
+			"title": "Averaged record",
+			"description": "True when this record is the average of the calibrations listed in source_filenames, made because a user chose to combine several calibrations that matched the same raw channel. False or null for a record taken from a single calibration."
 		},
 		"calibration_comments": {
 			"type": [
@@ -674,7 +691,8 @@
 			"transmit_power": 1000.0,
 			"transmit_duration_nominal": 0.001024,
 			"multiplexing_found": false,
-			"calibration_date": "7/18/2016",
+			"calibration_date": ["2016-07-18"],
+			"is_averaged": false,
 			"calibration_comments": "HB Bigelow 18 kHz calibration, 38.1-mm WC sphere, Newport naval anchorage south of bridge, 18 July 2016",
 			"calibration_version": null,
 			"absorption_indicative": 0.0018,

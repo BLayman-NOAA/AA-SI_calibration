@@ -41,10 +41,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional filename-datetime filtering (`file_time_start` / `file_time_end`)
   on `generate_standardized_cal_mapping`, matching the datetime encoded in each
   raw file's name; out-of-window remote files are never downloaded.
-- Initial project structure from NOAA Fisheries AA-SI Python template
+- Averaging calibration candidates. A conflict in `calibration_choices` can be
+  answered with a list of candidate keys, and the interactive prompt accepts
+  `1,2`. The candidates are averaged into a new single-channel file keyed
+  `<dates>__<frequency>__average-<digest>` with `is_averaged` set, and the
+  conflict's channels are mapped to it. Gain, Sa correction and equivalent beam
+  angle are averaged in the linear domain, and FM records over the union of
+  their frequency points as pyEchoLab does. Calibrations that differ in
+  hardware, settings or sphere are refused. New `averaging` module,
+  `average_calibration_records` and `average_candidates`.
+- `build_calibration_mapping` returns `single_channel_data`, which includes any
+  averaged record, and takes `record_author` for it.
+- The provenance report marks averaged calibration files, lists what went into
+  each with the gain and Sa correction spread between them, and counts
+  `calibration_files_averaged`.
+- Schema field `is_averaged`.
 
 ### Changed
-- Nothing yet
+- `calibration_date` is a list of strings in the schema, one entry per
+  calibration behind the record. Single-channel files and `override_channels`
+  carrying the old single string are still accepted and read as a one-item
+  list, and a one-date key, file name or conflict id is unchanged.
+- `DEFAULT_TOLERANCES` moved to `constants`; `mapping_algorithm` still
+  exports it.
 
 ### Deprecated
 - Nothing yet
@@ -53,6 +72,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nothing yet
 
 ### Fixed
+- `build_calibration_mapping` returned a mapping that named the rejected
+  candidate. With `short_filenames`, it remapped keys that were already
+  single-channel file names, renumbering `config-N` over whatever survived a
+  conflict, so choosing `config-2` came back as `config-1`. The archive call
+  accepted that mapping, because `config-1` was still in `single_channel_data`.
+  `channel_mapping.yaml` on disk was right; only the returned dictionaries were
+  wrong. The returned keys are now remapped only when they are not file names,
+  the same check `save_mapping_files` already made.
+- Resolving a conflict removed a calibration file that a raw channel outside
+  the conflict had matched on its own, leaving `channel_mapping.yaml` naming a
+  key with no file. A rejected key is now kept while any channel is still
+  mapped to it.
 - Filename-time filtering pulled in a stale raw file from before a gap between
   survey legs. Inferring a file's end from the next file's start stamp assumes
   recording ran continuously, so the last file before a gap looked like it

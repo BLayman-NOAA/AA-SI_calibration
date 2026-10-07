@@ -22,49 +22,51 @@
 - [19. Property `Standardized Calibration File > transmit_duration_nominal`](#transmit_duration_nominal)
 - [20. Property `Standardized Calibration File > multiplexing_found`](#multiplexing_found)
 - [21. Property `Standardized Calibration File > calibration_date`](#calibration_date)
-- [22. Property `Standardized Calibration File > calibration_comments`](#calibration_comments)
-- [23. Property `Standardized Calibration File > calibration_version`](#calibration_version)
-- [24. Property `Standardized Calibration File > absorption_indicative`](#absorption_indicative)
-- [25. Property `Standardized Calibration File > sound_speed_indicative`](#sound_speed_indicative)
-- [26. Property `Standardized Calibration File > temperature`](#temperature)
-- [27. Property `Standardized Calibration File > salinity`](#salinity)
-- [28. Property `Standardized Calibration File > acidity`](#acidity)
-- [29. Property `Standardized Calibration File > pressure`](#pressure)
-- [30. Property `Standardized Calibration File > sample_interval`](#sample_interval)
-- [31. Property `Standardized Calibration File > transmit_bandwidth`](#transmit_bandwidth)
-- [32. Property `Standardized Calibration File > beam_type`](#beam_type)
-- [33. Property `Standardized Calibration File > calibration_acquisition_method`](#calibration_acquisition_method)
-- [34. Property `Standardized Calibration File > sphere_diameter`](#sphere_diameter)
-- [35. Property `Standardized Calibration File > sphere_material`](#sphere_material)
-- [36. Property `Standardized Calibration File > source_file_type`](#source_file_type)
-- [37. Property `Standardized Calibration File > source_file_location`](#source_file_location)
-- [38. Property `Standardized Calibration File > sonar_software_version`](#sonar_software_version)
-- [39. Property `Standardized Calibration File > sonar_software_name`](#sonar_software_name)
-- [40. Property `Standardized Calibration File > equivalent_beam_angle`](#equivalent_beam_angle)
-- [41. Property `Standardized Calibration File > gain_correction`](#gain_correction)
-  - [41.1. Standardized Calibration File > gain_correction > gain_correction items](#gain_correction_items)
-- [42. Property `Standardized Calibration File > sa_correction`](#sa_correction)
-  - [42.1. Standardized Calibration File > sa_correction > sa_correction items](#sa_correction_items)
-- [43. Property `Standardized Calibration File > frequency`](#frequency)
-  - [43.1. Standardized Calibration File > frequency > frequency items](#frequency_items)
-- [44. Property `Standardized Calibration File > beamwidth_transmit_major`](#beamwidth_transmit_major)
-  - [44.1. Standardized Calibration File > beamwidth_transmit_major > beamwidth_transmit_major items](#beamwidth_transmit_major_items)
-- [45. Property `Standardized Calibration File > beamwidth_receive_major`](#beamwidth_receive_major)
-  - [45.1. Standardized Calibration File > beamwidth_receive_major > beamwidth_receive_major items](#beamwidth_receive_major_items)
-- [46. Property `Standardized Calibration File > beamwidth_transmit_minor`](#beamwidth_transmit_minor)
-  - [46.1. Standardized Calibration File > beamwidth_transmit_minor > beamwidth_transmit_minor items](#beamwidth_transmit_minor_items)
-- [47. Property `Standardized Calibration File > beamwidth_receive_minor`](#beamwidth_receive_minor)
-  - [47.1. Standardized Calibration File > beamwidth_receive_minor > beamwidth_receive_minor items](#beamwidth_receive_minor_items)
-- [48. Property `Standardized Calibration File > echoangle_major`](#echoangle_major)
-  - [48.1. Standardized Calibration File > echoangle_major > echoangle_major items](#echoangle_major_items)
-- [49. Property `Standardized Calibration File > echoangle_minor`](#echoangle_minor)
-  - [49.1. Standardized Calibration File > echoangle_minor > echoangle_minor items](#echoangle_minor_items)
-- [50. Property `Standardized Calibration File > echoangle_major_sensitivity`](#echoangle_major_sensitivity)
-  - [50.1. Standardized Calibration File > echoangle_major_sensitivity > echoangle_major_sensitivity items](#echoangle_major_sensitivity_items)
-- [51. Property `Standardized Calibration File > echoangle_minor_sensitivity`](#echoangle_minor_sensitivity)
-  - [51.1. Standardized Calibration File > echoangle_minor_sensitivity > echoangle_minor_sensitivity items](#echoangle_minor_sensitivity_items)
-- [52. Property `Standardized Calibration File > source_file_paths`](#source_file_paths)
-  - [52.1. Standardized Calibration File > source_file_paths > source_file_paths items](#source_file_paths_items)
+  - [21.1. Standardized Calibration File > calibration_date > calibration_date items](#calibration_date_items)
+- [22. Property `Standardized Calibration File > is_averaged`](#is_averaged)
+- [23. Property `Standardized Calibration File > calibration_comments`](#calibration_comments)
+- [24. Property `Standardized Calibration File > calibration_version`](#calibration_version)
+- [25. Property `Standardized Calibration File > absorption_indicative`](#absorption_indicative)
+- [26. Property `Standardized Calibration File > sound_speed_indicative`](#sound_speed_indicative)
+- [27. Property `Standardized Calibration File > temperature`](#temperature)
+- [28. Property `Standardized Calibration File > salinity`](#salinity)
+- [29. Property `Standardized Calibration File > acidity`](#acidity)
+- [30. Property `Standardized Calibration File > pressure`](#pressure)
+- [31. Property `Standardized Calibration File > sample_interval`](#sample_interval)
+- [32. Property `Standardized Calibration File > transmit_bandwidth`](#transmit_bandwidth)
+- [33. Property `Standardized Calibration File > beam_type`](#beam_type)
+- [34. Property `Standardized Calibration File > calibration_acquisition_method`](#calibration_acquisition_method)
+- [35. Property `Standardized Calibration File > sphere_diameter`](#sphere_diameter)
+- [36. Property `Standardized Calibration File > sphere_material`](#sphere_material)
+- [37. Property `Standardized Calibration File > source_file_type`](#source_file_type)
+- [38. Property `Standardized Calibration File > source_file_location`](#source_file_location)
+- [39. Property `Standardized Calibration File > sonar_software_version`](#sonar_software_version)
+- [40. Property `Standardized Calibration File > sonar_software_name`](#sonar_software_name)
+- [41. Property `Standardized Calibration File > equivalent_beam_angle`](#equivalent_beam_angle)
+- [42. Property `Standardized Calibration File > gain_correction`](#gain_correction)
+  - [42.1. Standardized Calibration File > gain_correction > gain_correction items](#gain_correction_items)
+- [43. Property `Standardized Calibration File > sa_correction`](#sa_correction)
+  - [43.1. Standardized Calibration File > sa_correction > sa_correction items](#sa_correction_items)
+- [44. Property `Standardized Calibration File > frequency`](#frequency)
+  - [44.1. Standardized Calibration File > frequency > frequency items](#frequency_items)
+- [45. Property `Standardized Calibration File > beamwidth_transmit_major`](#beamwidth_transmit_major)
+  - [45.1. Standardized Calibration File > beamwidth_transmit_major > beamwidth_transmit_major items](#beamwidth_transmit_major_items)
+- [46. Property `Standardized Calibration File > beamwidth_receive_major`](#beamwidth_receive_major)
+  - [46.1. Standardized Calibration File > beamwidth_receive_major > beamwidth_receive_major items](#beamwidth_receive_major_items)
+- [47. Property `Standardized Calibration File > beamwidth_transmit_minor`](#beamwidth_transmit_minor)
+  - [47.1. Standardized Calibration File > beamwidth_transmit_minor > beamwidth_transmit_minor items](#beamwidth_transmit_minor_items)
+- [48. Property `Standardized Calibration File > beamwidth_receive_minor`](#beamwidth_receive_minor)
+  - [48.1. Standardized Calibration File > beamwidth_receive_minor > beamwidth_receive_minor items](#beamwidth_receive_minor_items)
+- [49. Property `Standardized Calibration File > echoangle_major`](#echoangle_major)
+  - [49.1. Standardized Calibration File > echoangle_major > echoangle_major items](#echoangle_major_items)
+- [50. Property `Standardized Calibration File > echoangle_minor`](#echoangle_minor)
+  - [50.1. Standardized Calibration File > echoangle_minor > echoangle_minor items](#echoangle_minor_items)
+- [51. Property `Standardized Calibration File > echoangle_major_sensitivity`](#echoangle_major_sensitivity)
+  - [51.1. Standardized Calibration File > echoangle_major_sensitivity > echoangle_major_sensitivity items](#echoangle_major_sensitivity_items)
+- [52. Property `Standardized Calibration File > echoangle_minor_sensitivity`](#echoangle_minor_sensitivity)
+  - [52.1. Standardized Calibration File > echoangle_minor_sensitivity > echoangle_minor_sensitivity items](#echoangle_minor_sensitivity_items)
+- [53. Property `Standardized Calibration File > source_file_paths`](#source_file_paths)
+  - [53.1. Standardized Calibration File > source_file_paths > source_file_paths items](#source_file_paths_items)
 
 **Title:** Standardized Calibration File
 
@@ -102,7 +104,10 @@
     "transmit_power": 1000.0,
     "transmit_duration_nominal": 0.001024,
     "multiplexing_found": false,
-    "calibration_date": "7/18/2016",
+    "calibration_date": [
+        "2016-07-18"
+    ],
+    "is_averaged": false,
     "calibration_comments": "HB Bigelow 18 kHz calibration, 38.1-mm WC sphere, Newport naval anchorage south of bridge, 18 July 2016",
     "calibration_version": null,
     "absorption_indicative": 0.0018,
@@ -181,7 +186,8 @@
 | - [transmit_power](#transmit_power )                                 | No      | number                  | No         | -          | Nominal transmit power                                  |
 | - [transmit_duration_nominal](#transmit_duration_nominal )           | No      | number                  | No         | -          | Nominal duration of transmitted pulse                   |
 | - [multiplexing_found](#multiplexing_found )                         | No      | boolean or null         | No         | -          | Multiplexing found                                      |
-| - [calibration_date](#calibration_date )                             | No      | string or null          | No         | -          | Calibration date                                        |
+| - [calibration_date](#calibration_date )                             | No      | array of string or null | No         | -          | Calibration dates                                       |
+| - [is_averaged](#is_averaged )                                       | No      | boolean or null         | No         | -          | Averaged record                                         |
 | - [calibration_comments](#calibration_comments )                     | No      | string or null          | No         | -          | Calibration comments                                    |
 | - [calibration_version](#calibration_version )                       | No      | string or null          | No         | -          | Calibration processing version                          |
 | - [absorption_indicative](#absorption_indicative )                   | No      | number                  | No         | -          | Indicative acoustic absorption                          |
@@ -566,22 +572,61 @@ Numeric constraints: >= 0.0
 
 ## <a name="calibration_date"></a>21. Property `Standardized Calibration File > calibration_date`
 
-**Title:** Calibration date
+**Title:** Calibration dates
 
-|              |                  |
-| ------------ | ---------------- |
-| **Type**     | `string or null` |
-| **Required** | No               |
+|              |                           |
+| ------------ | ------------------------- |
+| **Type**     | `array of string or null` |
+| **Required** | No                        |
 
-**Description:** Date associated with the calibration measurements. Derived from calibration report files, so format is free-form.
+**Description:** Dates of the calibration measurements behind this record. One entry for a single calibration, and one per contributing calibration when the record is an average. Derived from calibration report files and converted to YYYY-MM-DD where the format is recognized, otherwise kept as written.
 
-**Example:**
+**Examples:**
 
 ```json
-"7/18/2016"
+[
+    "2016-07-18"
+]
 ```
 
-## <a name="calibration_comments"></a>22. Property `Standardized Calibration File > calibration_comments`
+```json
+[
+    "2023-06-27",
+    "2023-08-14"
+]
+```
+
+|                      | Array restrictions |
+| -------------------- | ------------------ |
+| **Min items**        | N/A                |
+| **Max items**        | N/A                |
+| **Items unicity**    | False              |
+| **Additional items** | False              |
+| **Tuple validation** | See below          |
+
+| Each item of this array must be                   | Description |
+| ------------------------------------------------- | ----------- |
+| [calibration_date items](#calibration_date_items) | -           |
+
+### <a name="calibration_date_items"></a>21.1. Standardized Calibration File > calibration_date > calibration_date items
+
+|              |          |
+| ------------ | -------- |
+| **Type**     | `string` |
+| **Required** | No       |
+
+## <a name="is_averaged"></a>22. Property `Standardized Calibration File > is_averaged`
+
+**Title:** Averaged record
+
+|              |                   |
+| ------------ | ----------------- |
+| **Type**     | `boolean or null` |
+| **Required** | No                |
+
+**Description:** True when this record is the average of the calibrations listed in source_filenames, made because a user chose to combine several calibrations that matched the same raw channel. False or null for a record taken from a single calibration.
+
+## <a name="calibration_comments"></a>23. Property `Standardized Calibration File > calibration_comments`
 
 **Title:** Calibration comments
 
@@ -592,7 +637,7 @@ Numeric constraints: >= 0.0
 
 **Description:** Narrative notes captured during the calibration event.
 
-## <a name="calibration_version"></a>23. Property `Standardized Calibration File > calibration_version`
+## <a name="calibration_version"></a>24. Property `Standardized Calibration File > calibration_version`
 
 **Title:** Calibration processing version
 
@@ -603,7 +648,7 @@ Numeric constraints: >= 0.0
 
 **Description:** Software or procedure version used when producing these calibration parameters. *add specifics
 
-## <a name="absorption_indicative"></a>24. Property `Standardized Calibration File > absorption_indicative`
+## <a name="absorption_indicative"></a>25. Property `Standardized Calibration File > absorption_indicative`
 
 **Title:** Indicative acoustic absorption
 
@@ -632,7 +677,7 @@ Numeric constraints: >= 0.0
 0.02
 ```
 
-## <a name="sound_speed_indicative"></a>25. Property `Standardized Calibration File > sound_speed_indicative`
+## <a name="sound_speed_indicative"></a>26. Property `Standardized Calibration File > sound_speed_indicative`
 
 **Title:** Indicative sound speed
 
@@ -657,7 +702,7 @@ Numeric constraints: >= 0.0
 1522.6
 ```
 
-## <a name="temperature"></a>26. Property `Standardized Calibration File > temperature`
+## <a name="temperature"></a>27. Property `Standardized Calibration File > temperature`
 
 **Title:** Water temperature
 
@@ -672,7 +717,7 @@ Precision: 2
 
 Units: degC
 
-## <a name="salinity"></a>27. Property `Standardized Calibration File > salinity`
+## <a name="salinity"></a>28. Property `Standardized Calibration File > salinity`
 
 **Title:** Water salinity
 
@@ -689,7 +734,7 @@ Units: psu
 
 Numeric constraints: >= 0.0
 
-## <a name="acidity"></a>28. Property `Standardized Calibration File > acidity`
+## <a name="acidity"></a>29. Property `Standardized Calibration File > acidity`
 
 **Title:** Water acidity (pH)
 
@@ -702,7 +747,7 @@ Numeric constraints: >= 0.0
 
 Precision: 2
 
-## <a name="pressure"></a>29. Property `Standardized Calibration File > pressure`
+## <a name="pressure"></a>30. Property `Standardized Calibration File > pressure`
 
 **Title:** Water pressure
 
@@ -719,7 +764,7 @@ Units: dbar
 
 Numeric constraints: >= 0.0
 
-## <a name="sample_interval"></a>30. Property `Standardized Calibration File > sample_interval`
+## <a name="sample_interval"></a>31. Property `Standardized Calibration File > sample_interval`
 
 **Title:** Interval between recorded raw data samples
 
@@ -744,7 +789,7 @@ Numeric constraints: >= 0.0
 0.000128
 ```
 
-## <a name="transmit_bandwidth"></a>31. Property `Standardized Calibration File > transmit_bandwidth`
+## <a name="transmit_bandwidth"></a>32. Property `Standardized Calibration File > transmit_bandwidth`
 
 **Title:** Nominal bandwidth of transmitted pulse
 
@@ -773,7 +818,7 @@ Numeric constraints: >= 0.0
 3030.0
 ```
 
-## <a name="beam_type"></a>32. Property `Standardized Calibration File > beam_type`
+## <a name="beam_type"></a>33. Property `Standardized Calibration File > beam_type`
 
 **Title:** Transducer beam type
 
@@ -786,7 +831,7 @@ Numeric constraints: >= 0.0
 
 Reference: SONAR-netCDF4 2.0 Sonar/Beam_group.beam_type
 
-## <a name="calibration_acquisition_method"></a>33. Property `Standardized Calibration File > calibration_acquisition_method`
+## <a name="calibration_acquisition_method"></a>34. Property `Standardized Calibration File > calibration_acquisition_method`
 
 **Title:** Calibration acquisition method
 
@@ -797,7 +842,7 @@ Reference: SONAR-netCDF4 2.0 Sonar/Beam_group.beam_type
 
 **Description:** Brief description of the calibration workflow or platform used.
 
-## <a name="sphere_diameter"></a>34. Property `Standardized Calibration File > sphere_diameter`
+## <a name="sphere_diameter"></a>35. Property `Standardized Calibration File > sphere_diameter`
 
 **Title:** Calibration sphere diameter
 
@@ -814,7 +859,7 @@ Units: mm
 
 Numeric constraints: >= 0.0
 
-## <a name="sphere_material"></a>35. Property `Standardized Calibration File > sphere_material`
+## <a name="sphere_material"></a>36. Property `Standardized Calibration File > sphere_material`
 
 **Title:** Calibration sphere material
 
@@ -831,7 +876,7 @@ Numeric constraints: >= 0.0
 "tungsten carbide"
 ```
 
-## <a name="source_file_type"></a>36. Property `Standardized Calibration File > source_file_type`
+## <a name="source_file_type"></a>37. Property `Standardized Calibration File > source_file_type`
 
 **Title:** Channel source file type
 
@@ -852,7 +897,7 @@ Numeric constraints: >= 0.0
 ".cal"
 ```
 
-## <a name="source_file_location"></a>37. Property `Standardized Calibration File > source_file_location`
+## <a name="source_file_location"></a>38. Property `Standardized Calibration File > source_file_location`
 
 **Title:** Channel source file location
 
@@ -877,7 +922,7 @@ Numeric constraints: >= 0.0
 "HDD"
 ```
 
-## <a name="sonar_software_version"></a>38. Property `Standardized Calibration File > sonar_software_version`
+## <a name="sonar_software_version"></a>39. Property `Standardized Calibration File > sonar_software_version`
 
 **Title:** Sonar software version
 
@@ -896,7 +941,7 @@ Reference: SONAR-netCDF4 2.0 Sonar.sonar_software_version
 "2.4.3"
 ```
 
-## <a name="sonar_software_name"></a>39. Property `Standardized Calibration File > sonar_software_name`
+## <a name="sonar_software_name"></a>40. Property `Standardized Calibration File > sonar_software_name`
 
 **Title:** Sonar software name
 
@@ -909,7 +954,7 @@ Reference: SONAR-netCDF4 2.0 Sonar.sonar_software_version
 
 Reference: SONAR-netCDF4 2.0 Sonar.sonar_software_name
 
-## <a name="equivalent_beam_angle"></a>40. Property `Standardized Calibration File > equivalent_beam_angle`
+## <a name="equivalent_beam_angle"></a>41. Property `Standardized Calibration File > equivalent_beam_angle`
 
 **Title:** Equivalent beam angle
 
@@ -932,7 +977,7 @@ Units: dB re sr
 -17.0
 ```
 
-## <a name="gain_correction"></a>41. Property `Standardized Calibration File > gain_correction`
+## <a name="gain_correction"></a>42. Property `Standardized Calibration File > gain_correction`
 
 **Title:** Gain correction
 
@@ -975,14 +1020,14 @@ Units: dB
 | ----------------------------------------------- | ----------- |
 | [gain_correction items](#gain_correction_items) | -           |
 
-### <a name="gain_correction_items"></a>41.1. Standardized Calibration File > gain_correction > gain_correction items
+### <a name="gain_correction_items"></a>42.1. Standardized Calibration File > gain_correction > gain_correction items
 
 |              |          |
 | ------------ | -------- |
 | **Type**     | `number` |
 | **Required** | No       |
 
-## <a name="sa_correction"></a>42. Property `Standardized Calibration File > sa_correction`
+## <a name="sa_correction"></a>43. Property `Standardized Calibration File > sa_correction`
 
 **Title:** Sa correction
 
@@ -1023,14 +1068,14 @@ Units: dB
 | ------------------------------------------- | ----------- |
 | [sa_correction items](#sa_correction_items) | -           |
 
-### <a name="sa_correction_items"></a>42.1. Standardized Calibration File > sa_correction > sa_correction items
+### <a name="sa_correction_items"></a>43.1. Standardized Calibration File > sa_correction > sa_correction items
 
 |              |          |
 | ------------ | -------- |
 | **Type**     | `number` |
 | **Required** | No       |
 
-## <a name="frequency"></a>43. Property `Standardized Calibration File > frequency`
+## <a name="frequency"></a>44. Property `Standardized Calibration File > frequency`
 
 **Title:** Acoustic frequency
 
@@ -1079,7 +1124,7 @@ Units: Hz
 | ----------------------------------- | --------------------------- |
 | [frequency items](#frequency_items) | Numeric constraints: >= 0.0 |
 
-### <a name="frequency_items"></a>43.1. Standardized Calibration File > frequency > frequency items
+### <a name="frequency_items"></a>44.1. Standardized Calibration File > frequency > frequency items
 
 |              |          |
 | ------------ | -------- |
@@ -1088,7 +1133,7 @@ Units: Hz
 
 **Description:** Numeric constraints: >= 0.0
 
-## <a name="beamwidth_transmit_major"></a>44. Property `Standardized Calibration File > beamwidth_transmit_major`
+## <a name="beamwidth_transmit_major"></a>45. Property `Standardized Calibration File > beamwidth_transmit_major`
 
 **Title:** Half power one-way transmit beam width along major axis
 
@@ -1131,7 +1176,7 @@ Units: arc_degree
 | ----------------------------------------------------------------- | ------------------------------------- |
 | [beamwidth_transmit_major items](#beamwidth_transmit_major_items) | Numeric constraints: >= 0.0, <= 360.0 |
 
-### <a name="beamwidth_transmit_major_items"></a>44.1. Standardized Calibration File > beamwidth_transmit_major > beamwidth_transmit_major items
+### <a name="beamwidth_transmit_major_items"></a>45.1. Standardized Calibration File > beamwidth_transmit_major > beamwidth_transmit_major items
 
 |              |                  |
 | ------------ | ---------------- |
@@ -1140,7 +1185,7 @@ Units: arc_degree
 
 **Description:** Numeric constraints: >= 0.0, <= 360.0
 
-## <a name="beamwidth_receive_major"></a>45. Property `Standardized Calibration File > beamwidth_receive_major`
+## <a name="beamwidth_receive_major"></a>46. Property `Standardized Calibration File > beamwidth_receive_major`
 
 **Title:** Half power one-way receive beam width along major axis
 
@@ -1183,7 +1228,7 @@ Units: arc_degree
 | --------------------------------------------------------------- | ------------------------------------- |
 | [beamwidth_receive_major items](#beamwidth_receive_major_items) | Numeric constraints: >= 0.0, <= 360.0 |
 
-### <a name="beamwidth_receive_major_items"></a>45.1. Standardized Calibration File > beamwidth_receive_major > beamwidth_receive_major items
+### <a name="beamwidth_receive_major_items"></a>46.1. Standardized Calibration File > beamwidth_receive_major > beamwidth_receive_major items
 
 |              |                  |
 | ------------ | ---------------- |
@@ -1192,7 +1237,7 @@ Units: arc_degree
 
 **Description:** Numeric constraints: >= 0.0, <= 360.0
 
-## <a name="beamwidth_transmit_minor"></a>46. Property `Standardized Calibration File > beamwidth_transmit_minor`
+## <a name="beamwidth_transmit_minor"></a>47. Property `Standardized Calibration File > beamwidth_transmit_minor`
 
 **Title:** Half power one-way transmit beam width along minor axis
 
@@ -1235,7 +1280,7 @@ Units: arc_degree
 | ----------------------------------------------------------------- | ------------------------------------- |
 | [beamwidth_transmit_minor items](#beamwidth_transmit_minor_items) | Numeric constraints: >= 0.0, <= 360.0 |
 
-### <a name="beamwidth_transmit_minor_items"></a>46.1. Standardized Calibration File > beamwidth_transmit_minor > beamwidth_transmit_minor items
+### <a name="beamwidth_transmit_minor_items"></a>47.1. Standardized Calibration File > beamwidth_transmit_minor > beamwidth_transmit_minor items
 
 |              |                  |
 | ------------ | ---------------- |
@@ -1244,7 +1289,7 @@ Units: arc_degree
 
 **Description:** Numeric constraints: >= 0.0, <= 360.0
 
-## <a name="beamwidth_receive_minor"></a>47. Property `Standardized Calibration File > beamwidth_receive_minor`
+## <a name="beamwidth_receive_minor"></a>48. Property `Standardized Calibration File > beamwidth_receive_minor`
 
 **Title:** Half power one-way receive beam width along minor axis
 
@@ -1287,7 +1332,7 @@ Units: arc_degree
 | --------------------------------------------------------------- | ------------------------------------- |
 | [beamwidth_receive_minor items](#beamwidth_receive_minor_items) | Numeric constraints: >= 0.0, <= 360.0 |
 
-### <a name="beamwidth_receive_minor_items"></a>47.1. Standardized Calibration File > beamwidth_receive_minor > beamwidth_receive_minor items
+### <a name="beamwidth_receive_minor_items"></a>48.1. Standardized Calibration File > beamwidth_receive_minor > beamwidth_receive_minor items
 
 |              |                  |
 | ------------ | ---------------- |
@@ -1296,7 +1341,7 @@ Units: arc_degree
 
 **Description:** Numeric constraints: >= 0.0, <= 360.0
 
-## <a name="echoangle_major"></a>48. Property `Standardized Calibration File > echoangle_major`
+## <a name="echoangle_major"></a>49. Property `Standardized Calibration File > echoangle_major`
 
 **Title:** Echo arrival angle in the major beam coordinate
 
@@ -1339,7 +1384,7 @@ Units: arc_degree
 | ----------------------------------------------- | ---------------------------------------- |
 | [echoangle_major items](#echoangle_major_items) | Numeric constraints: >= -180.0, <= 180.0 |
 
-### <a name="echoangle_major_items"></a>48.1. Standardized Calibration File > echoangle_major > echoangle_major items
+### <a name="echoangle_major_items"></a>49.1. Standardized Calibration File > echoangle_major > echoangle_major items
 
 |              |                  |
 | ------------ | ---------------- |
@@ -1348,7 +1393,7 @@ Units: arc_degree
 
 **Description:** Numeric constraints: >= -180.0, <= 180.0
 
-## <a name="echoangle_minor"></a>49. Property `Standardized Calibration File > echoangle_minor`
+## <a name="echoangle_minor"></a>50. Property `Standardized Calibration File > echoangle_minor`
 
 **Title:** Echo arrival angle in the minor beam coordinate
 
@@ -1391,7 +1436,7 @@ Units: arc_degree
 | ----------------------------------------------- | ---------------------------------------- |
 | [echoangle_minor items](#echoangle_minor_items) | Numeric constraints: >= -180.0, <= 180.0 |
 
-### <a name="echoangle_minor_items"></a>49.1. Standardized Calibration File > echoangle_minor > echoangle_minor items
+### <a name="echoangle_minor_items"></a>50.1. Standardized Calibration File > echoangle_minor > echoangle_minor items
 
 |              |                  |
 | ------------ | ---------------- |
@@ -1400,7 +1445,7 @@ Units: arc_degree
 
 **Description:** Numeric constraints: >= -180.0, <= 180.0
 
-## <a name="echoangle_major_sensitivity"></a>50. Property `Standardized Calibration File > echoangle_major_sensitivity`
+## <a name="echoangle_major_sensitivity"></a>51. Property `Standardized Calibration File > echoangle_major_sensitivity`
 
 **Title:** Major angle scaling factor
 
@@ -1443,7 +1488,7 @@ Units: 1
 | ----------------------------------------------------------------------- | --------------------------- |
 | [echoangle_major_sensitivity items](#echoangle_major_sensitivity_items) | Numeric constraints: >= 0.0 |
 
-### <a name="echoangle_major_sensitivity_items"></a>50.1. Standardized Calibration File > echoangle_major_sensitivity > echoangle_major_sensitivity items
+### <a name="echoangle_major_sensitivity_items"></a>51.1. Standardized Calibration File > echoangle_major_sensitivity > echoangle_major_sensitivity items
 
 |              |          |
 | ------------ | -------- |
@@ -1452,7 +1497,7 @@ Units: 1
 
 **Description:** Numeric constraints: >= 0.0
 
-## <a name="echoangle_minor_sensitivity"></a>51. Property `Standardized Calibration File > echoangle_minor_sensitivity`
+## <a name="echoangle_minor_sensitivity"></a>52. Property `Standardized Calibration File > echoangle_minor_sensitivity`
 
 **Title:** Minor angle scaling factor
 
@@ -1495,7 +1540,7 @@ Units: 1
 | ----------------------------------------------------------------------- | --------------------------- |
 | [echoangle_minor_sensitivity items](#echoangle_minor_sensitivity_items) | Numeric constraints: >= 0.0 |
 
-### <a name="echoangle_minor_sensitivity_items"></a>51.1. Standardized Calibration File > echoangle_minor_sensitivity > echoangle_minor_sensitivity items
+### <a name="echoangle_minor_sensitivity_items"></a>52.1. Standardized Calibration File > echoangle_minor_sensitivity > echoangle_minor_sensitivity items
 
 |              |          |
 | ------------ | -------- |
@@ -1504,7 +1549,7 @@ Units: 1
 
 **Description:** Numeric constraints: >= 0.0
 
-## <a name="source_file_paths"></a>52. Property `Standardized Calibration File > source_file_paths`
+## <a name="source_file_paths"></a>53. Property `Standardized Calibration File > source_file_paths`
 
 **Title:** Channel source file paths
 
@@ -1527,7 +1572,7 @@ Units: 1
 | --------------------------------------------------- | ----------- |
 | [source_file_paths items](#source_file_paths_items) | -           |
 
-### <a name="source_file_paths_items"></a>52.1. Standardized Calibration File > source_file_paths > source_file_paths items
+### <a name="source_file_paths_items"></a>53.1. Standardized Calibration File > source_file_paths > source_file_paths items
 
 |              |          |
 | ------------ | -------- |
@@ -1535,4 +1580,4 @@ Units: 1
 | **Required** | No       |
 
 ----------------------------------------------------------------------------------------------------------------------------
-Generated using [json-schema-for-humans](https://github.com/coveooss/json-schema-for-humans) on 2026-04-14 at 11:09:26 -0600
+Generated using [json-schema-for-humans](https://github.com/coveooss/json-schema-for-humans) on 2026-10-02 at 12:05:36 -0600

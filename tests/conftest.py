@@ -83,3 +83,64 @@ def tmp_output_dir(tmp_path):
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
     return dirs
+
+
+# ---------------------------------------------------------------------------
+# Standardized calibration records
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def calibration_record():
+    """Factory for a complete, schema-valid CW standardized record.
+
+    Two records from it differ only in the fields passed, so they match the
+    same raw channel and can be averaged.
+    """
+    def make(key=None, **overrides):
+        record = {
+            "source_filenames": ["CalibrationDataFile-D20230627-T181441-38kHz.xml"],
+            "record_created": "2026-01-01T00:00:00+00:00",
+            "record_author": "Calibrator",
+            "channel": "ES38-7 Serial No: 337",
+            "transceiver_id": "987763",
+            "transceiver_model": "WBT",
+            "transducer_model": "ES38-7",
+            "transducer_serial_number": "337",
+            "pulse_form": "0",
+            "frequency_start": 38000.0,
+            "frequency_end": 38000.0,
+            "nominal_transducer_frequency": 38000.0,
+            "transmit_power": 2000.0,
+            "transmit_duration_nominal": 0.001024,
+            "multiplexing_found": False,
+            "calibration_date": ["2023-06-27"],
+            "is_averaged": False,
+            "calibration_comments": "Pre-cruise calibration",
+            "absorption_indicative": 0.0098,
+            "sound_speed_indicative": 1490.0,
+            "temperature": 12.0,
+            "salinity": 32.0,
+            "sample_interval": 0.000256,
+            "transmit_bandwidth": 2425.0,
+            "beam_type": "BeamTypeSplit",
+            "sphere_diameter": 38.1,
+            "sphere_material": "tungsten carbide",
+            "source_file_type": ".xml",
+            "sonar_software_name": "EK80",
+            "equivalent_beam_angle": -20.7,
+            "gain_correction": [25.0],
+            "sa_correction": [-0.1],
+            "frequency": [38000.0],
+            "beamwidth_transmit_major": [7.0],
+            "beamwidth_receive_major": [7.0],
+            "beamwidth_transmit_minor": [7.0],
+            "beamwidth_receive_minor": [7.0],
+            "echoangle_major": [0.1],
+            "echoangle_minor": [-0.05],
+        }
+        record.update(overrides)
+        if key is not None:
+            record["_calibration_file_key"] = key
+        return record
+
+    return make

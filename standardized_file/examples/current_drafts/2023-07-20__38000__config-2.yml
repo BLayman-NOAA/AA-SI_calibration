@@ -18,7 +18,8 @@
 "transmit_power": 1000.0
 "transmit_duration_nominal": 0.001024
 "multiplexing_found": null
-"calibration_date": "2023-07-20"
+"calibration_date": ["2023-07-20"]
+"is_averaged": false
 "calibration_comments": "\n    "
 "calibration_version": null
 "absorption_indicative": 0.010397

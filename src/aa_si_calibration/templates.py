@@ -11,6 +11,7 @@ import yaml
 from .calibration_keys import (
     calibration_key_to_filename,
     build_short_filename_map,
+    join_calibration_dates,
     print_short_key_summary,
 )
 
@@ -52,7 +53,8 @@ def create_calibration_template(channel: dict, calibration_date: str) -> dict:
         'transmit_power': channel.get('transmit_power'),
         'transmit_duration_nominal': transmit_duration,
         'multiplexing_found': channel.get('multiplexing_found', False),
-        'calibration_date': calibration_date,
+        'calibration_date': [calibration_date],
+        'is_averaged': False,
         'calibration_comments': None,
         'calibration_version': None,
         'gain_correction': [None],
@@ -125,7 +127,7 @@ def generate_template_yaml_string(template: dict, calibration_date: str = None) 
     fmt = _fmt_yaml_value
     fmt_list = _fmt_yaml_list
     t = template
-    cal_date = calibration_date or t.get('calibration_date', '')
+    cal_date = join_calibration_dates(calibration_date or t.get('calibration_date', ''), ', ')
 
     yaml_str = f"""# Calibration template
 # Auto-generated from raw file channel configurations.
@@ -176,7 +178,8 @@ transmit_duration_nominal: {fmt(t['transmit_duration_nominal'])}  # [MAPPING] Pu
 multiplexing_found: {fmt(t['multiplexing_found'])}
 
 # Calibration metadata
-calibration_date: {fmt(t['calibration_date'])}  # [REQUIRED] Date of calibration (YYYY-MM-DD)
+calibration_date: {fmt_list(t['calibration_date'])}  # [REQUIRED] Date(s) of calibration (YYYY-MM-DD)
+is_averaged: {fmt(t['is_averaged'])}  # True only for a record averaged from several calibrations
 calibration_comments: {fmt(t['calibration_comments'])}  # [OPTIONAL] Notes about calibration
 calibration_version: {fmt(t['calibration_version'])}  # [OPTIONAL] Calibration version identifier
 
@@ -282,7 +285,8 @@ def generate_channel_section_yaml(channel_key: str, template: dict) -> str:
 {ind}transmit_duration_nominal: {fmt(t['transmit_duration_nominal'])}  # [MAPPING] Pulse duration
 {ind}multiplexing_found: {fmt(t['multiplexing_found'])}
 {ind}# Calibration metadata
-{ind}calibration_date: {fmt(t['calibration_date'])}  # [REQUIRED] Date (YYYY-MM-DD)
+{ind}calibration_date: {fmt_list(t['calibration_date'])}  # [REQUIRED] Date(s) (YYYY-MM-DD)
+{ind}is_averaged: {fmt(t['is_averaged'])}
 {ind}calibration_comments: {fmt(t['calibration_comments'])}  # [OPTIONAL]
 {ind}calibration_version: {fmt(t['calibration_version'])}  # [OPTIONAL]
 {ind}# Core calibration (required for Sv/TS)
@@ -386,7 +390,8 @@ def check_required_fields(template: dict) -> list:
     unfilled = []
 
     cal_date = template.get('calibration_date')
-    if cal_date is None or cal_date == 'YYYY-MM-DD':
+    cal_dates = [d for d in (cal_date if isinstance(cal_date, list) else [cal_date]) if d is not None]
+    if not cal_dates or 'YYYY-MM-DD' in cal_dates:
         unfilled.append('calibration_date')
 
     gain = template.get('gain_correction', [None])

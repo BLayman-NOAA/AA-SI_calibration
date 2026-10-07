@@ -31,7 +31,9 @@ from .calibration_keys import (  # noqa: F401
     extract_serial_number_from_channel_name,
     extract_channel_components,
     build_calibration_key,
+    build_average_calibration_key,
     calibration_key_to_filename,
+    join_calibration_dates,
     build_short_filename_map,
     remap_to_short_keys,
     print_short_key_summary,
@@ -283,6 +285,26 @@ def _normalize_date_to_iso8601(date_value):
     return date_value
 
 
+def normalize_calibration_date(value):
+    """Return a calibration_date value as the list of date strings the schema stores.
+
+    Accepts the single string that files and clients predating the list form
+    carry, and a date YAML parsed into a ``datetime.date``. Each entry is
+    converted to YYYY-MM-DD where its format is recognized.
+
+    Args:
+        value: A list of dates, a single date, or None.
+
+    Returns:
+        list[str] | None: The dates, or None when there are none.
+    """
+    if value is None:
+        return None
+    items = value if isinstance(value, (list, tuple)) else [value]
+    dates = [_normalize_date_to_iso8601(str(item)) for item in items if item is not None]
+    return dates or None
+
+
 def _normalize_source_list(raw_value):
     """Normalize source filenames to a list of strings, or None."""
     if raw_value is None:
@@ -529,9 +551,9 @@ def convert_params_to_standardized_names(channels, cal_params, env_params, other
             # Ensure pulse_form is a string
             channel_payload["pulse_form"] = str(channel_payload["pulse_form"])
 
-        # Convert calibration_date to ISO 8601 format if needed
-        if channel_payload.get("calibration_date") is not None:
-            channel_payload["calibration_date"] = _normalize_date_to_iso8601(channel_payload["calibration_date"])
+        channel_payload["calibration_date"] = normalize_calibration_date(
+            channel_payload.get("calibration_date")
+        )
 
         channel_payload["source_filenames"] = _normalize_source_list(channel_sources)
         channel_payload["source_file_type"] = _resolve_source_file_type(source_file_type_data, idx)
@@ -602,6 +624,9 @@ def assign_parameters_to_standardized_dictionary(
         for param_name, value in channel_param.items():
             if param_name in channel_entry:
                 channel_entry[param_name] = value
+        channel_entry["calibration_date"] = normalize_calibration_date(
+            channel_entry["calibration_date"]
+        )
         # Always set record_created timestamp when creating channel records
         channel_entry["record_created"] = record_created_timestamp
         # Set record_author from global_params if not already set on the channel
@@ -665,6 +690,7 @@ def get_empty_channel_params():
         "multiplexing_found": None,
         # Calibration metadata
         "calibration_date": None,
+        "is_averaged": False,
         "calibration_comments": None,
         "calibration_version": None,
         # Environmental parameters
@@ -1002,6 +1028,8 @@ def prepare_override_channels(channels):
     warnings = []
     for channel in channels:
         entry = ensure_string_identifiers(_strip_internal_keys(dict(channel)))
+        if "calibration_date" in entry:
+            entry["calibration_date"] = normalize_calibration_date(entry["calibration_date"])
         entry = apply_precision_to_channel(entry, precision_map)
         entry = convert_numpy_scalars(entry)
         warnings.extend(sanitize_degree_values(entry, schema))

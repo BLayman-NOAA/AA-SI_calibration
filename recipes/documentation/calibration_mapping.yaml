@@ -113,7 +113,8 @@ inputs:
     required: false
     description: >
       Conflict decisions from a previous "report" run, mapping a conflict id to
-      the calibration key to keep. Applied before the chosen mode runs, so a
+      the calibration key to keep, or to a list of candidate keys to average
+      into a new single-channel file. Applied before the chosen mode runs, so a
       partial map resolves what it covers and the rest is reported again.
 
 steps:
@@ -195,6 +196,7 @@ steps:
       keep_unused: true
       conflict_resolution: ${inputs.conflict_resolution}
       calibration_choices: ${inputs.calibration_choices}
+      record_author: ${inputs.record_author}
 
 outputs:
   conflicts:
@@ -212,11 +214,13 @@ outputs:
     output_name: calibration_dict
     description: "The calibration values behind each key in the mapping."
   single_channel_data:
-    step_id: standardize_cal
+    step_id: build_cal_mapping
     output_name: single_channel_data
     description: >
       The standardized channels the mapping was actually built from, carrying
-      their final file keys after any edits were applied.
+      their final file keys after any edits were applied, plus any record this
+      run averaged from several of them. Every key in mapping_dict names one
+      of these.
   provenance:
     step_id: build_cal_mapping
     output_name: provenance

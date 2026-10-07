@@ -6,6 +6,9 @@ those keys to short filenames and extracting channel components from
 channel name strings.
 """
 
+import hashlib
+import json
+
 import numpy as np
 
 from .constants import (
@@ -35,6 +38,24 @@ def _round_key_field(field_name, channel_data):
             return str(round(float(value), precision))
         except (TypeError, ValueError):
             pass
+    return str(value)
+
+
+def join_calibration_dates(value, separator='+'):
+    """Render a calibration_date value as one string.
+
+    Accepts the list the schema stores and a legacy single string, so a
+    one-date record renders exactly as it did before dates became a list.
+
+    Args:
+        value: A list of date strings, a single date string, or None.
+        separator: Placed between dates when there is more than one.
+
+    Returns:
+        The joined dates. A non-list value is passed through ``str``.
+    """
+    if isinstance(value, (list, tuple)):
+        return separator.join(str(d) for d in value)
     return str(value)
 
 
@@ -127,6 +148,8 @@ def build_calibration_key(channel_data: dict, calibration_date: str = None) -> s
         __<transmit_duration_nominal>__<transmit_power>__<frequency_start>
         __<frequency_end>
 
+    Several calibration dates are joined with ``+``.
+
     Args:
         channel_data: Channel dictionary (raw or calibration format).
         calibration_date: Optional override for the calibration date. If
@@ -136,7 +159,8 @@ def build_calibration_key(channel_data: dict, calibration_date: str = None) -> s
         Unique string key for the channel configuration.
     """
     if calibration_date is None:
-        calibration_date = str(channel_data.get('calibration_date', ''))
+        calibration_date = channel_data.get('calibration_date', '')
+    calibration_date = join_calibration_dates(calibration_date)
 
     channel_name = channel_data.get('channel') or channel_data.get('channel_id', '')
 
@@ -216,7 +240,9 @@ def build_short_filename_map(
     date_freq_groups: dict = {}
     for cal_key, channel_data in cal_keys_to_channels.items():
         freq = _get_nominal_frequency_hz(channel_data)
-        date_str = calibration_date or str(channel_data.get('calibration_date', ''))
+        date_str = join_calibration_dates(
+            calibration_date or channel_data.get('calibration_date', '')
+        )
         date_freq_groups.setdefault((date_str, freq), []).append(cal_key)
 
     short_map: dict = {}
@@ -226,6 +252,38 @@ def build_short_filename_map(
             short_map[cal_key] = f"{date_str}__{freq_str}__config-{idx}"
 
     return short_map
+
+
+def build_average_calibration_key(
+    channel_data: dict,
+    source_keys,
+    short_filenames: bool = True,
+) -> str:
+    """Build the key, and file stem, of a record averaged from several others.
+
+    The suffix is a digest of the sorted source keys, so averaging the same
+    calibrations gives the same key on every call. A caller that resends its
+    choices to a stateless server therefore gets back the key it already holds.
+
+    Args:
+        channel_data: The averaged record.
+        source_keys: Keys of the calibration records that were averaged.
+        short_filenames: If True, use the compact
+            ``<dates>__<frequency_hz>__average-<digest>`` form; otherwise append
+            the suffix to the full calibration key.
+
+    Returns:
+        A filesystem-safe key, with ``+`` between calibration dates.
+    """
+    canonical = json.dumps(sorted(source_keys), separators=(',', ':'), ensure_ascii=False)
+    suffix = f"average-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:6]}"
+    if short_filenames:
+        freq = _get_nominal_frequency_hz(channel_data)
+        dates = join_calibration_dates(channel_data.get('calibration_date', ''))
+        key = f"{dates}__{freq if freq is not None else 'unknown'}__{suffix}"
+    else:
+        key = f"{build_calibration_key(channel_data)}__{suffix}"
+    return calibration_key_to_filename(key)
 
 
 def remap_to_short_keys(

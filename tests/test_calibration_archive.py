@@ -39,7 +39,7 @@ def _channel(**overrides):
     channel = {
         "channel": "ES38-7 Serial No: 337 - Narrow",
         "frequency": [38000.0],
-        "calibration_date": "2023-06-27",
+        "calibration_date": ["2023-06-27"],
         "source_filenames": ["cal_38kHz_CW.xml"],
         "transducer_model": "ES38-7",
         "transducer_serial_number": "337",

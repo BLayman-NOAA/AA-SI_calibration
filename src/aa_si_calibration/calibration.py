@@ -38,6 +38,7 @@ from aa_si_calibration.mapping_algorithm import (
     print_conflict_report,
     check_required_calibration_params,
     verify_calibration_file_usage,
+    keys_are_file_stems,
 )
 from aa_si_calibration.standardized_file_lib import (
     remap_to_short_keys,
@@ -1581,6 +1582,7 @@ def build_calibration_mapping(
     tolerances=None,
     unmapped_channels=None,
     cruise_id=None,
+    record_author=None,
 ):
     """Match each raw channel to its calibration data and save the mapping.
 
@@ -1609,8 +1611,9 @@ def build_calibration_mapping(
             instead returns the conflicts on the ``conflicts`` key without
             writing any mapping file.
         calibration_choices: Optional ``{conflict_id: calibration key to keep}``
-            from a previous run's ``conflicts``. Applied in every mode before
-            that mode's handler runs.
+            from a previous run's ``conflicts``, or a list of keys in place of
+            one key to average those candidates into a new single-channel
+            file. Applied in every mode before that mode's handler runs.
         keep_unused: If True, unused/rejected calibration files are moved to an
             ``unused_calibration_files`` subfolder instead of being deleted.
         tolerances: Per-field match tolerances, merged over
@@ -1626,8 +1629,10 @@ def build_calibration_mapping(
             both possibilities. Wire it to the same value the consuming
             extract_standardized_cal_params step uses.
         cruise_id: Recorded in the provenance report when known.
+        record_author: Recorded as the author of any averaged record.
         short_filenames: If True, remap the returned dictionaries to compact
-            keys.
+            keys when they are not already the single-channel file names, and
+            give averaged records compact keys.
         verbose: If True, print progress information.
 
     Returns:
@@ -1645,6 +1650,10 @@ def build_calibration_mapping(
               over which stretch of the cruise, and why. JSON-safe, so a server
               can hand it straight to a client.
             - provenance_path: Where that report was written as YAML.
+            - single_channel_data: ``{"channels": [...]}``, the channels the
+              mapping was built from plus any averaged records, each carrying
+              its ``_calibration_file_key``. Every key in mapping_dict names
+              one of them.
     """
     if conflict_resolution not in _CONFLICT_MODES:
         raise ValueError(
@@ -1703,6 +1712,21 @@ def build_calibration_mapping(
         print_provenance_summary(report, path)
         return report, str(path)
 
+    def _single_channel_data():
+        """The channels the mapping was built from, plus the averages it made.
+
+        The standardization step's payload has never seen an average, so a
+        mapping that names one has to return the record alongside it.
+        """
+        channels = {
+            ch["_calibration_file_key"]: ch for ch in calibration_data["channels"]
+        }
+        channels.update({
+            key: result.calibration_dict[key]
+            for key in result.averaged if key in result.calibration_dict
+        })
+        return standardized_file_lib.single_channel_payload(channels)
+
     # Runs before conflict resolution, so an "error" run has tidied the folder
     # by the time it raises.
     moved_aside = handle_unused_calibration_files(
@@ -1719,6 +1743,8 @@ def build_calibration_mapping(
             cal_files_dir=single_cal_output,
             keep_unused=keep_unused,
             unused_dir=unused_cal_output,
+            record_author=record_author,
+            short_filenames=short_filenames,
         )
         moved_aside = list(moved_aside) + [
             single_cal_output / f"{calibration_key_to_filename(k)}.yaml"
@@ -1730,6 +1756,8 @@ def build_calibration_mapping(
             result, single_cal_output,
             keep_unused=keep_unused,
             unused_dir=unused_cal_output,
+            record_author=record_author,
+            short_filenames=short_filenames,
         )
     elif conflict_resolution == "report":
         if result.multiple_matches:
@@ -1753,6 +1781,7 @@ def build_calibration_mapping(
                 "unused_files": moved_aside,
                 "unused_file_names": [Path(f).name for f in moved_aside],
                 "conflicts": describe_conflicts(result),
+                "single_channel_data": _single_channel_data(),
             }
     else:
         check_for_conflicts(result, cal_files_dir=single_cal_output)
@@ -1778,7 +1807,10 @@ def build_calibration_mapping(
         print(f"Saved calibration dictionary to: {calibration_path}")
         print(f"\nNote: Single-channel calibration files already exist in: {single_cal_output}")
 
-    if short_filenames:
+    # Keys read from the folder are already file stems. Remapping them would
+    # renumber config-N over the survivors, so a returned key would name the
+    # file a conflict rejected. save_mapping_files applies the same check.
+    if short_filenames and not keys_are_file_stems(calibration_dict):
         mapping_dict, calibration_dict, short_map = remap_to_short_keys(
             mapping_dict, calibration_dict,
         )
@@ -1803,6 +1835,7 @@ def build_calibration_mapping(
         "conflicts": {},
         "provenance": provenance,
         "provenance_path": provenance_path,
+        "single_channel_data": _single_channel_data(),
     }
 
 
@@ -2056,4 +2089,5 @@ def generate_standardized_cal_mapping(
         tolerances=tolerances,
         unmapped_channels=unmapped_channels,
         cruise_id=global_params["cruise_id"],
+        record_author=global_params.get("record_author"),
     )

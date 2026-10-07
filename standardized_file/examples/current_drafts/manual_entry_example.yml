@@ -54,7 +54,8 @@ multiplexing_found: false
 # -----------------------------------------------------------------------------
 # CALIBRATION METADATA
 # -----------------------------------------------------------------------------
-calibration_date: "2026-02-18"  # [REQUIRED] Date of calibration in YYYY-MM-DD (can be generated from user config)
+calibration_date: ["2026-02-18"]  # [REQUIRED] Date(s) of calibration in YYYY-MM-DD (can be generated from user config)
+is_averaged: false  # True only for a record averaged from several calibrations
 calibration_comments: null  # [OPTIONAL] Notes about calibration
 calibration_version: null  # [OPTIONAL] Calibration version identifier
 
