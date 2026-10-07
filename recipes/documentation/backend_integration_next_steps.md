@@ -5,13 +5,12 @@ locally. This document lists what is left before they can be deployed and used
 from the UI.
 
 For what each endpoint accepts and returns, see
-[calibration_service_api.md](calibration_service_api.md). The backend differs
-from that document in a few places, listed below.
+[calibration_service_api.md](calibration_service_api.md).
 
 ## What exists today
 
 The code is on the `calibration-endpoints` branch of AA_SI_UI, under
-`src/backend`. It is not committed yet.
+`src/backend`. It is committed and pushed but not yet merged.
 
 | Endpoint | What it does |
 | --- | --- |
@@ -36,27 +35,7 @@ It has been tested with the backend test suite and with a full run of all four
 endpoints on local example data. It has not been run against cloud storage or
 built into a Docker image.
 
-## Differences from calibration_service_api.md
-
-- **Three survey fields are required on every call:** `ship`, `cruise_id` and
-  `sonar_model`. Each must be a plain folder name, such as `Reuben_Lasker`,
-  `RL2307` and `EK80`. Spaces and slashes are rejected.
-- **Input folders must be `gs://` paths.** `raw_input_folder` and
-  `cal_input_folder` are read by the server, so local paths are rejected.
-- **The client does not send `archive_dir`.** The backend builds it as
-  `<archive root>/<ship>/<cruise_id>/<sonar_model>/Calibration/archive` and
-  returns it in the response.
-- **The client does not send `conflict_resolution`.** The backend always uses
-  report mode. Sending the field is rejected.
-- **`record_author` defaults to the logged in user's name.**
-- **`raw_file_configs` is not returned** by standardize.
-- **`DELETE /calibration/cache` is new.** It takes the three survey fields as
-  query parameters and returns `{"cache_dir": ..., "cleared": true or false}`.
-- **Errors** come back as
-  `{"detail": {"message": ..., "error_type": ..., "step_id": ...}}` with the
-  status codes suggested in the API document.
-
-## Step 1: Push the packages the backend installs
+## Packages the backend installs
 
 The backend's `requirements.txt` installs three packages from GitHub:
 
@@ -66,11 +45,11 @@ aa-si-utils @ git+https://github.com/BLayman-NOAA/AA-SI_Utils.git
 aa-si-calibration[echopype,gcs] @ git+https://github.com/BLayman-NOAA/AA-SI_calibration.git
 ```
 
-The Docker build pulls whatever is on GitHub at build time. Recent local work
-in those repositories must be pushed first, or the deployed endpoints will run
-older code than the one that was tested. Brett owns this step.
+The work these endpoints depend on is pushed to `main` in all three. The
+Docker build pulls whatever is on `main` at build time, so a later push to
+any of them reaches the backend on its next build.
 
-## Step 2: Set the environment variables
+## Step 1: Set the environment variables
 
 Set these on the backend, in `.env` locally and on the Cloud Run service.
 
@@ -85,7 +64,7 @@ Set these on the backend, in `.env` locally and on the Cloud Run service.
 Until the two required values are set, the calibration endpoints return 503.
 The rest of the API is unaffected.
 
-## Step 3: Grant storage access
+## Step 2: Grant storage access
 
 The backend's service account needs:
 
@@ -96,16 +75,18 @@ The backend's service account needs:
 A missing permission on the archive folder only shows up at the last step of
 the workflow, so check it up front.
 
-## Step 4: Raise the request timeouts and size limit
+## Step 3: Raise the request timeouts and size limit
 
 Standardize is one long HTTP request. A full survey can take 10 to 15 minutes
 or more. Mapping and archive requests carry the reviewed channels and the
 whole mapping, which runs to a few megabytes for a survey of several thousand
 raw files.
 
-**nginx**, in `src/frontend/metadata_ui/nginx.conf`, inside `location /api/`.
-The default timeout is 60 seconds and the default request size limit is 1 MB,
-which a full survey's mapping or archive request will exceed.
+**nginx**, in `src/frontend/metadata_ui/nginx.conf`. Calibration requests go
+through the general `location /api/` block, not the cached block above it
+that serves tugboat, utils and table names. Add these inside the general
+block. The default timeout is 60 seconds and the default request size limit
+is 1 MB, which a full survey's mapping or archive request will exceed.
 
 ```nginx
 proxy_read_timeout 3600s;
@@ -131,7 +112,7 @@ the defaults. Sizing has not been measured in Cloud Run yet. See
 A timeout on standardize loses no work. Each scanned file is saved to the
 cache as it goes, so sending the same request again resumes where it stopped.
 
-## Step 5: Add a lifecycle rule on the cache
+## Step 4: Add a lifecycle rule on the cache
 
 The UI clears a survey's cache with `DELETE /calibration/cache` once the survey
 is submitted. A user who starts calibration and never finishes leaves their
@@ -158,7 +139,7 @@ gcloud storage buckets update gs://<bucket> --lifecycle-file=lifecycle.json
 This command replaces the bucket's whole lifecycle configuration. If the bucket
 already has rules, add this rule to the existing file.
 
-## Step 6: Build and smoke test
+## Step 5: Build and smoke test
 
 Build the image to confirm the new requirements install:
 
@@ -206,7 +187,7 @@ first and copy the `session_token` cookie.
 
 Leave the time window out to process every raw file in the folder.
 
-## Step 7: Wire up the frontend
+## Step 6: Wire up the frontend
 
 The flow the UI needs:
 
@@ -241,9 +222,10 @@ cd src/backend
 python -m pytest test/ -m "not live"
 ```
 
-The backend needs Python 3.13, which aalibrary requires. One test checks that
-the standardize and mapping recipes share a cache. It is skipped when the
-recipe manager is not installed.
+The backend needs Python 3.13, which aalibrary requires. Two sets of tests
+need the recipe manager and the calibration package installed, and are
+skipped without them: one loads each bundled recipe, and one checks that the
+standardize and mapping recipes share a cache.
 
 The recipe files in `src/backend/recipes/calibration/` were adapted from the
 ones in this folder. If a step changes here, make the same change there.

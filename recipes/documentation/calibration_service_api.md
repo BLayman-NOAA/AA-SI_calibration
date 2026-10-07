@@ -2,18 +2,20 @@
 
 Three calls that turn manufacturer calibration files into a mapping from raw
 echosounder channels to the calibration that applies to them, and then archive
-the result.
+the result, plus one that clears the survey's cache afterwards.
 
 It is shaped so that a stateless server and a local CLI user run the same code
 path: the data a browser client edits is an ordinary recipe input, not a file
 only a local user can reach.
 
-The HTTP layer described here **does not exist yet**. What is built and tested
-is the recipe interface underneath it, so the endpoints below are a proposed
-contract sized to what the recipes already accept and return. Every payload in
-this document was generated from the running code rather than written by hand.
+The endpoints are served by the AA_SI_UI backend, under `src/backend`. Every
+call requires a logged in user, and the UI reaches them as
+`/api/calibration/...`. Every payload in this document was generated from the
+running code rather than written by hand.
 
-For how to deploy and configure the service, see
+For what is left before the backend can be deployed and used from the UI, see
+[backend_integration_next_steps.md](backend_integration_next_steps.md). For
+sizing a Cloud Run instance, see
 [cloud_run_deployment.md](cloud_run_deployment.md).
 
 ## At a glance
@@ -22,14 +24,19 @@ For how to deploy and configure the service, see
 | --- | --- | --- | --- |
 | `POST /calibration/standardize` | [calibration_standardize.yaml](calibration_standardize.yaml) | Parses the manufacturer files into one standardized record per channel and returns them for review. | Minutes. Scans every raw file in the window. |
 | `POST /calibration/mapping` | [calibration_mapping.yaml](calibration_mapping.yaml) | Matches raw channels against the reviewed records. Reports ambiguity instead of guessing. Called again with the user's choices, each one candidate to keep or several to average, until nothing is ambiguous. | Seconds, with the scan cached. |
-| `POST /calibration/archive` | [save_calibration.yaml](save_calibration.yaml) | Writes the finished calibration to a directory the survey keeps. | Seconds. |
+| `POST /calibration/archive` | [save_calibration.yaml](save_calibration.yaml) | Writes the finished calibration to the survey's archive folder. | Seconds. |
+| `DELETE /calibration/cache` | none | Deletes the cached raw file scan for one survey once it is submitted. | Seconds. |
 
-The three recipes sit next to this document. There is no server-side logic
-above them: an endpoint is one recipe run through `api.execute`, so the recipe
-file is the authoritative list of what a call accepts and returns, and the
-tables below describe the same fields. They carry RL2307 defaults, which is the
-survey every example here is drawn from; point the input folders elsewhere for
-another cruise.
+Each recipe endpoint is one recipe run through `api.execute`. The backend runs
+general copies of the three recipes, kept in `src/backend/recipes/calibration/`
+with no survey defaults. The copies next to this document carry RL2307
+defaults for local runs, and RL2307 is the survey every example here is drawn
+from.
+
+Above the recipes, the backend does three things of its own. It picks a cache
+folder and an archive folder from the [survey fields](#survey-fields), it
+always resolves conflicts in report mode, and it translates failures into the
+status codes under [Errors](#errors).
 
 ## Why three calls
 
@@ -48,8 +55,8 @@ empty disk, and it is why the archived files always match what was actually
 mapped.
 
 Call 3 exists because the first two write into a directory that does not
-outlive the request. Everything the survey keeps has to be written somewhere the
-caller names.
+outlive the request. Everything the survey keeps has to be written somewhere
+durable, which is the survey's archive folder.
 
 ## End to end
 
@@ -84,14 +91,19 @@ sequenceDiagram
 
     Note over B: user checks provenance:<br/>what was applied where, and why
 
-    B->>S: POST /calibration/archive + archive_dir
+    B->>S: POST /calibration/archive
     activate S
     S->>A: mapping, provenance, one file per channel
-    S-->>B: 200 { files_written }
+    S-->>B: 200 { archive_dir, files_written }
     deactivate S
+
+    Note over B: survey submitted to the archive
+
+    B->>S: DELETE /calibration/cache
+    S->>G: survey's cache folder removed
 ```
 
-Every call is synchronous: one HTTP request runs one recipe through
+Every call is synchronous. Each of the first three runs one recipe through
 `api.execute` and returns its outputs.
 
 **The cache hit in the middle is the point of the split.** RL2307 is 5,763 raw
@@ -108,6 +120,29 @@ still banked everything it scanned, so the same request sent again resumes
 rather than starting over. See
 [cloud_run_deployment.md](cloud_run_deployment.md) for sizing.
 
+## Survey fields
+
+Every call carries three fields that name the survey.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `ship` | string | The ship's folder name in the bucket, such as `Reuben_Lasker`. Not the display name used on the Tugboat form. |
+| `cruise_id` | string | Such as `RL2307`. Also stamped into every generated calibration file. |
+| `sonar_model` | string | Such as `EK80`. |
+
+Each becomes one folder in a path, so each must be a plain folder name of
+letters, digits, `.`, `_` and `-`. Spaces and slashes are rejected with 422.
+
+They choose two folders, both under roots the deployment configures:
+
+```
+cache:    <CALIBRATION_CACHE_DIR>/<ship>/<cruise_id>/<sonar_model>
+archive:  <CALIBRATION_ARCHIVE_ROOT>/<ship>/<cruise_id>/<sonar_model>/Calibration/archive
+```
+
+Send the same three values on every call for a survey. Mapping reuses the
+standardize scan only when both calls resolve to the same cache folder.
+
 ## POST /calibration/standardize
 
 Parses the manufacturer calibration files and returns the standardized channels
@@ -117,18 +152,20 @@ for review.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `raw_input_folder` | string | yes | Folder of `.raw` files, a local path or a `gs://` URL. Read for channel configuration only; the files are never fully downloaded. |
-| `cal_input_folder` | string | yes | Folder of manufacturer calibration files: `.cal` for EK60, `.xml` for EK80. |
-| `cruise_id` | string | no | Stamped into every generated file so it stays traceable to the survey. |
-| `record_author` | string | no | Recorded as the author of every generated file. |
-| `file_time_start` | string | no | ISO 8601. Narrows the raw file set. |
+| `ship`, `cruise_id`, `sonar_model` | string | yes | See [Survey fields](#survey-fields). |
+| `raw_input_folder` | string | yes | `gs://` folder of `.raw` files. Read for channel configuration only; the files are never fully downloaded. |
+| `cal_input_folder` | string | yes | `gs://` folder of manufacturer calibration files: `.cal` for EK60, `.xml` for EK80. |
+| `record_author` | string | no | Recorded as the author of every generated file. Defaults to the logged in user's name. |
+| `file_time_start` | string | no | ISO 8601. Narrows the raw file set. Leave both out to use every raw file in the folder. |
 | `file_time_end` | string | no | ISO 8601. |
 
 ```json
 {
+  "ship": "Reuben_Lasker",
+  "cruise_id": "RL2307",
+  "sonar_model": "EK80",
   "raw_input_folder": "gs://ggn-nmfs-aa-prod-1-data/HDD/Reuben_Lasker/RL2307/EK80/data/raw",
   "cal_input_folder": "gs://ggn-nmfs-aa-prod-1-data/HDD/Reuben_Lasker/RL2307/EK80/Calibration/RESULTS",
-  "cruise_id": "RL2307",
   "file_time_start": "2023-07-17T16:30:46",
   "file_time_end": "2023-07-18T19:50:19"
 }
@@ -140,7 +177,6 @@ for review.
 | --- | --- | --- |
 | `single_channel_data` | object | `{"channels": [...]}`, one entry per standardized channel. This is what the user reviews. See [Channel object](#channel-object). |
 | `single_channel_dir` | string | Where the files were written inside the container. Useful in logs; the client cannot read it. |
-| `raw_file_configs` | array | Scanned channel configuration of every raw file in the window. One entry per file, so it is large for a full survey; omit it from the response unless the client has a use for it. |
 
 ```json
 {
@@ -157,7 +193,7 @@ for review.
 ## POST /calibration/mapping
 
 Matches each raw channel to its calibration. Takes every field from
-`/calibration/standardize`, plus the three below.
+`/calibration/standardize`, plus the two below.
 
 ### Request
 
@@ -165,7 +201,10 @@ Matches each raw channel to its calibration. Takes every field from
 | --- | --- | --- | --- |
 | `override_channels` | object | no | The reviewed channels, in the exact shape `single_channel_data` came back in. Omit an entry to discard that channel; edit values in place to correct them. Omitting the field entirely re-parses the manufacturer files. |
 | `calibration_choices` | object | no | `{conflict_id: chosen_cal_key}` from a previous response, or `{conflict_id: [cal_key, ...]}` to average several candidates. A partial map resolves what it covers and reports the rest. See [Averaging candidates](#averaging-candidates). |
-| `conflict_resolution` | string | no | Pin this to `"report"` server side, as the handler in the deployment guide does. `"report"` returns conflicts and writes nothing. `"error"` raises. `"interactive"` prompts on a terminal and must never reach a server. The recipe's own default is `"interactive"`, for local use. |
+
+Conflicts are always handled in report mode: the call returns them and writes
+no mapping until they are resolved. The recipe's other modes raise or prompt
+on a terminal, so a request that sends `conflict_resolution` is rejected.
 
 ### Response fields
 
@@ -236,6 +275,9 @@ with one field added.
 
 ```json
 {
+  "ship": "Reuben_Lasker",
+  "cruise_id": "RL2307",
+  "sonar_model": "EK80",
   "raw_input_folder": "gs://...",
   "cal_input_folder": "gs://...",
   "override_channels": { "channels": [] },
@@ -376,8 +418,8 @@ Two things a client must not do:
 
 ## POST /calibration/archive
 
-Writes the finished calibration to a directory the caller names, so it outlives
-the run. Quick: a handful of small YAML files, and it reads nothing.
+Writes the finished calibration to the survey's archive folder, so it
+outlives the run. Quick: a handful of small YAML files, and it reads nothing.
 
 Everything is rendered from the data the previous calls returned, so the server
 needs nothing left over from them. Send the three fields back as they came.
@@ -386,16 +428,21 @@ needs nothing left over from them. Send the three fields back as they came.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `archive_dir` | string | yes | Directory to write the archive into. A local path, or a `gs://` URL. Refused when it is not empty. |
-| `mapping_dict` | object | no | From the mapping response, unchanged. Read from the run's own outputs folder when omitted, which only a local run can rely on. |
-| `provenance` | object | no | From the mapping response, unchanged. |
-| `single_channel_data` | object | no | From the mapping response, unchanged: it carries the file keys `mapping_dict` refers to. |
-| `overwrite` | boolean | no | Replace an archive already in `archive_dir`. Default `false`. |
-| `output_base` | string | no | Calibration outputs folder to read the three fields above from when they are omitted. Defaults to the folder this run wrote. A local convenience; a server supplies the data instead and never sets it. |
+| `ship`, `cruise_id`, `sonar_model` | string | yes | See [Survey fields](#survey-fields). They decide the archive folder. |
+| `mapping_dict` | object | yes | From the mapping response, unchanged. |
+| `provenance` | object | yes | From the mapping response, unchanged. |
+| `single_channel_data` | object | yes | From the mapping response, unchanged: it carries the file keys `mapping_dict` refers to. |
+| `overwrite` | boolean | no | Replace an archive already in the folder. Default `false`. |
+
+The client does not choose the destination. The backend builds it from the
+survey fields and returns it as `archive_dir`, which is the value the
+submission form's `calFileURI` takes.
 
 ```json
 {
-  "archive_dir": "gs://ggn-nmfs-aa-prod-1-data/HDD/Reuben_Lasker/RL2307/EK80/Calibration/archive",
+  "ship": "Reuben_Lasker",
+  "cruise_id": "RL2307",
+  "sonar_model": "EK80",
   "mapping_dict": { "...": "from the mapping response" },
   "provenance": { "...": "from the mapping response" },
   "single_channel_data": { "...": "from the mapping response" }
@@ -406,7 +453,7 @@ needs nothing left over from them. Send the three fields back as they came.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `archive_dir` | string | The directory that was written. |
+| `archive_dir` | string | The folder that was written. |
 | `mapping_path` | string | Full path of the archived `channel_mapping.yaml`. |
 | `provenance_path` | string | Full path of the archived `calibration_provenance.yaml`. Unlike the mapping call's field of the same name, this one points at a file that outlives the request. |
 | `reports_dir` | string | The `Standardized_Reports` folder holding the channel files. |
@@ -448,16 +495,40 @@ against the other.
 An archive that looks complete and is not is worse than a failed call, so these
 are refused. Nothing is written when one fires.
 
-- an `archive_dir` that is not empty, unless `overwrite` is set;
+- an archive folder that is not empty, unless `overwrite` is set;
 - an empty `mapping_dict`, which is what the mapping call returns while
   conflicts are outstanding;
 - a `mapping_dict` naming a calibration file that `single_channel_data` does not
   carry, which means the two came from different mapping runs;
 - a channel whose file key is missing, shared with another channel, or not a
   plain file name. The key becomes a filename, so it is checked rather than
-  trusted: a key carrying a path separator would write outside `archive_dir`,
+  trusted: a key carrying a path separator would write outside the folder,
   and two channels sharing a key would write one over the other and report both
   as archived.
+
+## DELETE /calibration/cache
+
+Deletes the survey's cache folder, which holds the raw file scan that lets
+mapping skip it. Call it once the survey has been submitted. The archive does
+not depend on the cache, but running calibration for the survey again
+afterwards scans every raw file again.
+
+### Request
+
+The three [survey fields](#survey-fields), as query parameters.
+
+```
+DELETE /calibration/cache?ship=Reuben_Lasker&cruise_id=RL2307&sonar_model=EK80
+```
+
+### Response
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `cache_dir` | string | The cache folder for the survey. |
+| `cleared` | boolean | `true` when something was deleted, `false` when the folder was already gone. |
+
+Calling it twice is safe: the second call returns `"cleared": false`.
 
 ## Channel object
 
@@ -852,29 +923,47 @@ the status, which is why the filter above tests for it separately.
 
 ## Errors
 
-The recipes raise ordinary Python exceptions. The status codes below are a
-suggested mapping for the wrapper, not existing behaviour.
+A failed recipe run returns this shape. `step_id` names the recipe step that
+failed, and is `null` when the failure came from outside a step.
 
-| Condition | Suggested | Detail |
+```json
+{
+  "detail": {
+    "message": "Unknown conflict id(s): conflict-abc. Valid id(s): none.",
+    "error_type": "ValueError",
+    "step_id": "build_cal_mapping"
+  }
+}
+```
+
+The first three rows below are not recipe failures. A 401 and a 422 use
+FastAPI's own error bodies, and a 503 carries only `message`.
+
+| Condition | Status | Detail |
 | --- | --- | --- |
+| Not logged in | 401 | The session cookie is missing, expired or invalid. |
+| Invalid request | 422 | A required field is missing, a survey field is not a plain folder name, an input folder is not `gs://`, or the body carries a field the call does not accept, such as `conflict_resolution` or `archive_dir`. FastAPI's validation body names the field. |
+| Service not configured | 503 | `CALIBRATION_CACHE_DIR` is not set, or `CALIBRATION_ARCHIVE_ROOT` for the archive call. The rest of the API is unaffected. |
 | Unknown conflict id | 400 | `ValueError: Unknown conflict id(s): ...`. Usually means `override_channels` changed between calls, so the ids no longer match. The message lists the valid ids. |
 | Choice not a candidate | 400 | `ValueError: '...' is not a candidate for conflict-...`. The key must be one of that conflict's `candidate_keys`. |
 | Malformed choice | 400 | `ValueError: The choice for conflict-... must be a calibration key, or a list of keys to average` or `... names a calibration more than once`. |
 | Candidates cannot be averaged | 400 | `ValueError: conflict-...: Cannot average these calibrations: <field> differs (<key>: <value>, ...)`, or `... the result is not a valid standardized record` when a source carries a value the schema rejects. Show it against the conflict it names; the user picks one candidate instead, or corrects the field during review if the records should agree. No choice in the request was applied. |
 | Invalid channel edit | 422 | `jsonschema.ValidationError`. An edited value failed the standardized schema; the message names the field and the expected type. Surface it on the field the user touched. |
-| Bad `conflict_resolution` | 400 | Only `"error"`, `"interactive"` and `"report"` are accepted. |
-| No calibration files found | 404 | `FileNotFoundError` from an empty or wrong `cal_input_folder`. |
-| `interactive` without a terminal | 500 | Guard against this in the wrapper. It raises before moving any file, but a server should never send it. |
+| No raw or calibration files found | 404 | `FileNotFoundError` from an empty or wrong input folder, or a time window that matches no raw file. |
 | Archive directory not empty | 409 | `ValueError: ... is not empty`. Confirm with the user, then resend with `overwrite: true`. |
 | Archiving an empty mapping | 409 | `ValueError: mapping_dict is empty`. Conflicts are still outstanding; there is nothing to archive yet. |
 | Archive content mismatch | 400 | `ValueError: The mapping references ... not in single_channel_data`. The two fields came from different mapping runs; resend both from the same response. |
 | Bad calibration file key | 400 | `ValueError: ... cannot be used as filenames` or `... appear on more than one channel`. A key must be one plain file name, unique across channels. Resend `single_channel_data` unchanged. |
 | Malformed archive payload | 400 | `ValueError: single_channel_data must carry one dictionary per channel`, or the same for `mapping_dict`. The body is not in the shape the mapping call returned. |
+| Anything else | 500 | An unexpected failure. The full error is in the backend log. |
+
+Any other `ValueError` a step raises is returned as 400.
 
 ## Running it locally
 
-None of this is web-only. A local user runs the same three recipes and works
-with the calibration folder directly.
+None of this is web-only. A local user runs the three recipes next to this
+document and works with the calibration folder directly. The survey fields and
+the cache endpoint belong to the service and have no local counterpart.
 
 ```bash
 aa-recipe run calibration_standardize.yaml
