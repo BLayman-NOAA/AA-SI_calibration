@@ -27,7 +27,7 @@ from .mapping_algorithm import (
     find_matching_calibration,
     values_match_with_tolerance,
 )
-from .averaging import value_spread
+from .averaging import merge_coverage, value_spread
 from .standardized_file_lib import json_safe
 from . import _console
 
@@ -595,7 +595,8 @@ def build_calibration_provenance(
         ("channels_multiplexed", multiplexed),
         ("calibration_files_loaded", result.total_calibrations_loaded),
         ("calibration_files_used", len(result.calibration_dict)),
-        ("calibration_files_averaged", len(result.averaged)),
+        ("calibration_files_averaged", _count_used(result.averaged, result)),
+        ("calibration_files_merged", _count_used(result.merged, result)),
     ])
 
     report["tolerances"] = OrderedDict([
@@ -641,20 +642,26 @@ def build_calibration_provenance(
     report["channels"] = channels
 
     report["calibration_files"] = OrderedDict(
-        (cal_key, _calibration_file_entry(cal_data, result.averaged.get(cal_key)))
+        (cal_key, _calibration_file_entry(cal_key, cal_data, result))
         for cal_key, cal_data in sorted(result.calibration_dict.items())
     )
 
     return json_safe(report)
 
 
-def _calibration_file_entry(cal_data, sources=None):
+def _count_used(made, result):
+    """How many of the records a run made are calibration files it uses."""
+    return sum(1 for key in made if key in result.calibration_dict)
+
+
+def _calibration_file_entry(cal_key, cal_data, result):
     """Describe one calibration file the mapping uses.
 
     Args:
+        cal_key: The file's calibration key.
         cal_data: The calibration record.
-        sources: ``{key: record}`` of the calibrations it was averaged from,
-            when it is an average made by this run.
+        result: The MappingResult, whose ``averaged`` and ``merged`` name the
+            sources of any record this run made.
     """
     entry = OrderedDict([
         ("channel", cal_data.get("channel")),
@@ -666,30 +673,59 @@ def _calibration_file_entry(cal_data, sources=None):
         ("measured_at", _settings(cal_data)),
         ("source_filenames", cal_data.get("source_filenames")),
         ("is_averaged", bool(cal_data.get("is_averaged"))),
+        ("is_merged", bool(cal_data.get("is_merged"))),
     ])
-    if sources:
-        records = list(sources.values())
-        # Spreads rather than every value: an FM record carries one gain per
-        # frequency point, and the largest disagreement is what a reviewer
-        # weighs when deciding whether the average was sound.
-        entry["gain_correction_spread_db"] = value_spread(records, "gain_correction")
-        entry["sa_correction_spread_db"] = value_spread(records, "sa_correction")
-        entry["averaged_from"] = [_averaged_source(key, record) for key, record in sources.items()]
+    sources = result.merged.get(cal_key) or result.averaged.get(cal_key)
+    if not sources:
+        return entry
+    records = list(sources.values())
+    # Spreads rather than every value: an FM record carries one gain per
+    # frequency point, and the largest disagreement is what a reviewer weighs
+    # when deciding whether the combination was sound. For a merge it is the
+    # disagreement where the calibrations overlap.
+    entry["gain_correction_spread_db"] = value_spread(records, "gain_correction")
+    entry["sa_correction_spread_db"] = value_spread(records, "sa_correction")
+    if cal_key not in result.merged:
+        entry["averaged_from"] = [_combined_source(key, record) for key, record in sources.items()]
+        return entry
+    coverage = merge_coverage(records)
+    entry["coverage"] = coverage["coverage"]
+    entry["holes_hz"] = coverage["holes_hz"]
+    entry["merged_from"] = [
+        _combined_source(key, record, result.averaged.get(key))
+        for key, record in sources.items()
+    ]
     return entry
 
 
-def _averaged_source(cal_key, record):
-    """One calibration that went into an average."""
+def _combined_source(cal_key, record, averaged_from=None):
+    """One calibration that went into an average or a merge.
+
+    Args:
+        cal_key: Its calibration key.
+        record: Its record.
+        averaged_from: ``{key: record}`` when it is an average made only to be
+            merged, which is described through the calibrations it averages.
+    """
     source = OrderedDict([
         ("calibration_key", cal_key),
         ("calibration_date", record.get("calibration_date")),
         ("source_filenames", record.get("source_filenames")),
+        ("sphere_diameter", record.get("sphere_diameter")),
+        ("sphere_material", record.get("sphere_material")),
     ])
     # A CW record's corrections are single values, short enough to show.
     for field in ("gain_correction", "sa_correction"):
         values = record.get(field)
         if isinstance(values, list) and len(values) == 1:
             source[field] = values[0]
+    if averaged_from:
+        records = list(averaged_from.values())
+        source["gain_correction_spread_db"] = value_spread(records, "gain_correction")
+        source["sa_correction_spread_db"] = value_spread(records, "sa_correction")
+        source["average_of"] = [
+            _combined_source(key, rec) for key, rec in averaged_from.items()
+        ]
     return source
 
 

@@ -68,6 +68,7 @@ class _DummyMappingResult:
         self.matched_channels = 1
         self.total_calibrations_loaded = 1
         self.averaged = {}
+        self.merged = {}
 
     def print_summary(self):
         return None

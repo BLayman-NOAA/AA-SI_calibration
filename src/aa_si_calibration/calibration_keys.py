@@ -275,8 +275,38 @@ def build_average_calibration_key(
     Returns:
         A filesystem-safe key, with ``+`` between calibration dates.
     """
-    canonical = json.dumps(sorted(source_keys), separators=(',', ':'), ensure_ascii=False)
-    suffix = f"average-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:6]}"
+    return _combination_key(channel_data, sorted(source_keys), "average", short_filenames)
+
+
+def build_merge_calibration_key(
+    channel_data: dict,
+    source_keys,
+    short_filenames: bool = True,
+) -> str:
+    """Build the key, and file stem, of a record merged from several others.
+
+    The suffix is a digest of the source keys in the order they were merged,
+    since the order decides which calibration supplies each frequency. Merging
+    the same calibrations in the same order gives the same key on every call.
+
+    Args:
+        channel_data: The merged record.
+        source_keys: Keys of the merged records, in priority order. A source
+            averaged in the same choice is named by its average key.
+        short_filenames: If True, use the compact
+            ``<dates>__<frequency_hz>__merge-<digest>`` form; otherwise append
+            the suffix to the full calibration key.
+
+    Returns:
+        A filesystem-safe key, with ``+`` between calibration dates.
+    """
+    return _combination_key(channel_data, list(source_keys), "merge", short_filenames)
+
+
+def _combination_key(channel_data, source_keys, kind, short_filenames):
+    """The key of a combined record: its base form plus ``<kind>-<digest>``."""
+    canonical = json.dumps(source_keys, separators=(',', ':'), ensure_ascii=False)
+    suffix = f"{kind}-{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:6]}"
     if short_filenames:
         freq = _get_nominal_frequency_hz(channel_data)
         dates = join_calibration_dates(channel_data.get('calibration_date', ''))

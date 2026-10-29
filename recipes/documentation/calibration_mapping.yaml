@@ -113,9 +113,13 @@ inputs:
     required: false
     description: >
       Conflict decisions from a previous "report" run, mapping a conflict id to
-      the calibration key to keep, or to a list of candidate keys to average
-      into a new single-channel file. Applied before the chosen mode runs, so a
-      partial map resolves what it covers and the rest is reported again.
+      the calibration key to keep, to a list of candidate keys to average, or
+      to {"merge": [keys]} to merge them as the EK80 software does, the first
+      key used wherever its sphere is valid and the later ones filling the
+      rest. A merge item may itself be {"average": [keys]}. An average or
+      merge becomes a new single-channel file. Applied before the chosen mode
+      runs, so a partial map resolves what it covers and the rest is reported
+      again.
 
 steps:
 
@@ -219,8 +223,8 @@ outputs:
     description: >
       The standardized channels the mapping was actually built from, carrying
       their final file keys after any edits were applied, plus any record this
-      run averaged from several of them. Every key in mapping_dict names one
-      of these.
+      run averaged or merged from several of them. Every key in mapping_dict
+      names one of these.
   provenance:
     step_id: build_cal_mapping
     output_name: provenance

@@ -144,3 +144,28 @@ def calibration_record():
         return record
 
     return make
+
+
+@pytest.fixture
+def fm_calibration_record(calibration_record):
+    """Factory for a schema-valid FM record with a gain per frequency point.
+
+    Its setting band is 30-45 kHz. Sa correction is -0.1 dB at every point
+    unless given. Pass *valid_frequency_bands* for a record whose sphere is
+    valid only in parts of the band.
+    """
+    def make(key, frequency, gain, valid_frequency_bands=None, **overrides):
+        fields = {
+            "pulse_form": "1",
+            "frequency_start": 30000.0,
+            "frequency_end": 45000.0,
+            "frequency": list(frequency),
+            "gain_correction": list(gain),
+            "sa_correction": [-0.1] * len(frequency),
+            **overrides,
+        }
+        if valid_frequency_bands is not None:
+            fields["valid_frequency_bands"] = valid_frequency_bands
+        return calibration_record(key, **fields)
+
+    return make

@@ -56,6 +56,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each with the gain and Sa correction spread between them, and counts
   `calibration_files_averaged`.
 - Schema field `is_averaged`.
+- Merging calibration candidates, as the EK80 software merges calibrations
+  made with different spheres. A conflict in `calibration_choices` can be
+  answered with `{"merge": [keys]}`: the calibrations are taken in the order
+  given, the first is used wherever its sphere is valid, and each later one
+  fills only what the earlier ones leave. The merged record holds only
+  measured points, every field at a point taken from the calibration that
+  measured it, and is never averaged where the calibrations overlap. The
+  sphere may differ; every other setting must match, and only FM records can
+  be merged. A merge item may be `{"average": [keys]}`, so a pre- and
+  post-cruise pair can be averaged and merged over a second sphere in one
+  choice; only the merged record is written. `{"average": [keys]}` is also
+  accepted as the explicit form of a list. The interactive prompt accepts
+  `1>2` to merge with 1 first and `(1,2)>3` to average and then merge. The
+  merged file is keyed `<dates>__<frequency>__merge-<digest>`, the digest
+  taken over the keys in order. Frequencies no calibration covers are
+  reported as a warning, never refused. New `merge_calibration_records`,
+  `merge_candidates`, `merge_coverage` and `calibration_coverage`.
+- Schema fields `is_merged` and `valid_frequency_bands`. The bands are read
+  from `ValidFrequencyBands` in an EK80 calibration file and written only on
+  FM records, so CW and EK60 standardized files are unchanged.
+- The provenance report marks merged calibration files with the calibration
+  that supplies each band, the `holes_hz` none covers, the gain and Sa
+  correction spread where they overlap, and the ordered sources, a nested
+  average described through its own sources. It counts
+  `calibration_files_merged`.
+- `extract_standardized_calibration_parameters` returns a frequency-dependent
+  calibration as an `xr.DataArray` with dims `(cal_channel_id,
+  cal_frequency)`, the form `echopype.calibrate.compute_Sv` interpolates at
+  each ping's centre frequency, and warns when a channel's centre frequency
+  falls outside the bands its calibration covers. An FM record's single
+  equivalent beam angle, beam width or angle sensitivity is its value at the
+  nominal transducer frequency, and is carried across the band the way
+  echopype carries its own, since echopype uses a supplied value as given.
+  New `waveform_mode` and
+  `encode_mode` select the beam group echopype calibrates, so a file mixing
+  CW and FM channels is extracted one group at a time. The comparison
+  functions forward both modes to echopype.
 
 ### Changed
 - `calibration_date` is a list of strings in the schema, one entry per
@@ -72,6 +109,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nothing yet
 
 ### Fixed
+- Averaging no longer interpolates an FM calibration across the gaps between
+  its valid frequency bands, which are the bands inhibited around its sphere's
+  nulls. A source has values only between its own points inside each band, so
+  such a gap is filled from the other sources rather than bridged. Records
+  without valid bands average as before. A record none of whose points lies
+  in its valid bands is refused rather than averaged into nothing.
+- An FM calibration reached echopype as a nested list it cannot use; it is
+  now passed in the frequency-dependent form echopype accepts.
+- `print_calibration_values` failed on a null calibration value, such as the
+  angle sensitivities EK80 records leave empty.
 - `build_calibration_mapping` returned a mapping that named the rejected
   candidate. With `short_filenames`, it remapped keys that were already
   single-channel file names, renumbering `config-N` over whatever survived a

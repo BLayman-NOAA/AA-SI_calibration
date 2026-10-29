@@ -790,3 +790,264 @@ def test_the_prompt_computes_each_average_once(monkeypatch, tmp_path, calibratio
 
     assert calls == [["k1", "k2"]]
     assert len(result.averaged) == 1
+
+
+# ---------------------------------------------------------------------------
+# Merging candidates
+# ---------------------------------------------------------------------------
+
+_THREE_CONFLICT = conflict_group_id(["k1", "k2", "k3"])
+
+
+def _spheres(fm_calibration_record, post=False):
+    """k1 a large sphere, k2 a small one between its bands, k3 a repeat of k1.
+
+    Merged, they leave 39.2-39.5 kHz uncovered.
+    """
+    large = dict(
+        frequency=[30000.0, 31000.0, 32000.0, 40000.0, 41000.0, 45000.0],
+        valid_frequency_bands=[[29000.0, 32500.0], [39500.0, 46000.0]],
+    )
+    records = {
+        "k1": fm_calibration_record(
+            "k1", gain=[20.0, 21.0, 22.0, 30.0, 31.0, 35.0], **large,
+        ),
+        "k2": fm_calibration_record(
+            "k2",
+            [31500.0, 33000.0, 36000.0, 39000.0, 41500.0],
+            [50.0, 51.0, 52.0, 53.0, 54.0],
+            valid_frequency_bands=[[31000.0, 39200.0], [41000.0, 42000.0]],
+            calibration_date=["2023-07-21"],
+            source_filenames=["small.xml"],
+            sphere_diameter=22.0,
+        ),
+    }
+    if post:
+        records["k3"] = fm_calibration_record(
+            "k3", gain=[22.0, 23.0, 24.0, 32.0, 33.0, 37.0],
+            calibration_date=["2023-08-14"], source_filenames=["post.xml"], **large,
+        )
+    return records
+
+
+def _conflict_over(calibration_dict):
+    keys = sorted(calibration_dict)
+    return _result(
+        {"a.raw": {"ch-1": keys[0]}},
+        [MultipleMatchChannel("a.raw", "ch-1", len(keys), keys)],
+        calibration_dict,
+    )
+
+
+def _folder(tmp_path, keys):
+    cal_dir = tmp_path / "single_channel_calibration_files"
+    cal_dir.mkdir()
+    for key in keys:
+        (cal_dir / f"{key}.yaml").write_text(f"channel: {key}")
+    return cal_dir, tmp_path / "unused_calibration_files"
+
+
+def test_an_average_mapping_is_the_same_as_a_list(calibration_record):
+    by_list = _one_conflict(_averageable(calibration_record))
+    by_mapping = _one_conflict(_averageable(calibration_record))
+
+    apply_conflict_choices(by_list, {_AVERAGE_CONFLICT: ["k1", "k2"]})
+    apply_conflict_choices(by_mapping, {_AVERAGE_CONFLICT: {"average": ["k1", "k2"]}})
+
+    assert list(by_mapping.averaged) == list(by_list.averaged)
+    assert by_mapping.mapping_dict == by_list.mapping_dict
+
+
+def test_a_merge_choice_writes_one_merged_file(tmp_path, fm_calibration_record):
+    cal_dir, unused = _folder(tmp_path, ["k1", "k2"])
+    result = _one_conflict(_spheres(fm_calibration_record))
+
+    removed = apply_conflict_choices(
+        result, {_AVERAGE_CONFLICT: {"merge": ["k2", "k1"]}},
+        cal_files_dir=cal_dir, keep_unused=True, unused_dir=unused,
+    )
+
+    (merge_key,) = result.merged
+    assert merge_key.startswith("2023-07-21+2023-06-27__38000__merge-")
+    assert removed == {"k1", "k2"}
+    assert result.averaged == {}
+    assert list(result.merged[merge_key]) == ["k2", "k1"]
+    assert result.mapping_dict["a.raw"]["ch-1"] == merge_key
+    assert result.multiple_matches == []
+
+    written = yaml.safe_load((cal_dir / f"{merge_key}.yaml").read_text())
+    assert written["is_merged"] is True
+    assert written["is_averaged"] is False
+    assert written["gain_correction"][:3] == [20.0, 21.0, 50.0]
+    assert (unused / "k1.yaml").exists() and (unused / "k2.yaml").exists()
+
+
+def test_the_order_of_a_merge_changes_its_key(fm_calibration_record):
+    forward = _one_conflict(_spheres(fm_calibration_record))
+    backward = _one_conflict(_spheres(fm_calibration_record))
+
+    apply_conflict_choices(forward, {_AVERAGE_CONFLICT: {"merge": ["k2", "k1"]}})
+    apply_conflict_choices(backward, {_AVERAGE_CONFLICT: {"merge": ["k1", "k2"]}})
+
+    assert list(forward.merged) != list(backward.merged)
+
+
+def test_a_merge_that_leaves_a_hole_warns(monkeypatch, fm_calibration_record):
+    printed = []
+    monkeypatch.setattr(
+        _console, "console_print", lambda *a, **_k: printed.append(" ".join(map(str, a)))
+    )
+    result = _one_conflict(_spheres(fm_calibration_record))
+
+    apply_conflict_choices(result, {_AVERAGE_CONFLICT: {"merge": ["k2", "k1"]}})
+
+    assert result.multiple_matches == []
+    assert any("no calibration in 39200-39500 Hz" in line for line in printed)
+
+
+def test_an_average_nested_in_a_merge_is_not_written(tmp_path, fm_calibration_record):
+    cal_dir, unused = _folder(tmp_path, ["k1", "k2", "k3"])
+    result = _conflict_over(_spheres(fm_calibration_record, post=True))
+
+    removed = apply_conflict_choices(
+        result, {_THREE_CONFLICT: {"merge": [{"average": ["k1", "k3"]}, "k2"]}},
+        cal_files_dir=cal_dir, keep_unused=True, unused_dir=unused,
+    )
+
+    (average_key,) = result.averaged
+    (merge_key,) = result.merged
+    assert set(result.averaged[average_key]) == {"k1", "k3"}
+    assert list(result.merged[merge_key]) == [average_key, "k2"]
+    assert removed == {"k1", "k2", "k3"}
+    assert average_key not in result.calibration_dict
+    assert not (cal_dir / f"{average_key}.yaml").exists()
+    written = yaml.safe_load((cal_dir / f"{merge_key}.yaml").read_text())
+    assert written["is_merged"] is True and written["is_averaged"] is True
+
+
+@pytest.mark.parametrize("choice, message", [
+    ({"merge": [{"merge": ["k1", "k2"]}]}, "nests merge inside merge"),
+    ({"average": [{"average": ["k1", "k2"]}]}, "nests average inside average"),
+    ({"average": ["k1"], "merge": ["k2"]}, "must be a calibration key"),
+    ({"keep": ["k1"]}, "must be a calibration key"),
+    ({"merge": []}, "must be a calibration key"),
+    ({"merge": "k1"}, "must be a calibration key"),
+    ({"merge": ["k1", "k1"]}, "more than once"),
+    ({"merge": [["k1", "k2"], "k1"]}, "more than once"),
+    ({"merge": ["k1", "k9"]}, "is not a candidate"),
+])
+def test_a_malformed_merge_choice_is_rejected(choice, message):
+    result = _one_conflict()
+
+    with pytest.raises(ValueError, match=message):
+        apply_conflict_choices(result, {_AVERAGE_CONFLICT: choice})
+
+    assert len(result.multiple_matches) == 1
+
+
+def test_cw_candidates_cannot_be_merged(tmp_path, calibration_record):
+    cal_dir, unused = _folder(tmp_path, ["k1", "k2"])
+    result = _one_conflict(_averageable(calibration_record, sphere_diameter=22.0))
+
+    with pytest.raises(ValueError, match="Select one of them instead"):
+        apply_conflict_choices(
+            result, {_AVERAGE_CONFLICT: {"merge": ["k1", "k2"]}},
+            cal_files_dir=cal_dir, keep_unused=True, unused_dir=unused,
+        )
+
+    assert result.merged == {}
+    assert sorted(p.name for p in cal_dir.iterdir()) == ["k1.yaml", "k2.yaml"]
+
+
+@pytest.mark.parametrize("answer, first", [("2>1", "k2"), ("1 > 2", "k1")])
+def test_the_prompt_merges_in_the_order_typed(
+    monkeypatch, tmp_path, fm_calibration_record, answer, first
+):
+    monkeypatch.setattr(_console, "prompt", lambda *_a, **_k: answer)
+    result = _one_conflict(_spheres(fm_calibration_record))
+
+    resolve_conflicts_interactive(result, tmp_path)
+
+    (merge_key,) = result.merged
+    assert list(result.merged[merge_key])[0] == first
+    assert (tmp_path / f"{merge_key}.yaml").exists()
+
+
+@pytest.mark.parametrize("answer", ["(1,3)>2", "1,3>2"])
+def test_the_prompt_averages_then_merges(monkeypatch, tmp_path, fm_calibration_record, answer):
+    monkeypatch.setattr(_console, "prompt", lambda *_a, **_k: answer)
+    result = _conflict_over(_spheres(fm_calibration_record, post=True))
+
+    resolve_conflicts_interactive(result, tmp_path)
+
+    (average_key,) = result.averaged
+    (merge_key,) = result.merged
+    assert list(result.merged[merge_key]) == [average_key, "k2"]
+    assert not (tmp_path / f"{average_key}.yaml").exists()
+
+
+def test_the_prompt_asks_again_for_a_malformed_merge(monkeypatch, tmp_path, fm_calibration_record):
+    answers = iter(["1>>2", "1>1", "2>1"])
+    shown = []
+
+    def prompt(_text, context=None):
+        shown.append(context)
+        return next(answers)
+
+    monkeypatch.setattr(_console, "prompt", prompt)
+    result = _one_conflict(_spheres(fm_calibration_record))
+
+    resolve_conflicts_interactive(result, tmp_path)
+
+    assert "INVALID INPUT" in shown[1] and "INVALID INPUT" in shown[2]
+    assert len(result.merged) == 1
+
+
+def test_the_mapping_step_completes_with_a_merge(monkeypatch, tmp_path, fm_calibration_record):
+    """Report, answer with a nested merge, then archive."""
+    out, result = _mapping_step_result(
+        monkeypatch, tmp_path,
+        multiple_matches=[MultipleMatchChannel("a.raw", "ch-1", 3, ["k1", "k2", "k3"])],
+        calibration_dict=_spheres(fm_calibration_record, post=True),
+        conflict_resolution="report",
+        calibration_choices={_THREE_CONFLICT: {"merge": [{"average": ["k1", "k3"]}, "k2"]}},
+        record_author="Reviewer",
+    )
+
+    (average_key,) = result.averaged
+    (merge_key,) = result.merged
+    assert out["conflicts"] == {}
+    assert out["mapping_dict"] == {"a.raw": {"ch-1": merge_key}}
+
+    channels = {c["_calibration_file_key"] for c in out["single_channel_data"]["channels"]}
+    assert channels == {"k1", "k2", "k3", merge_key}
+    json.dumps(out["single_channel_data"])
+
+    summary = out["provenance"]["summary"]
+    assert summary["calibration_files_merged"] == 1
+    assert summary["calibration_files_averaged"] == 0
+    entry = out["provenance"]["calibration_files"][merge_key]
+    assert entry["is_merged"] is True
+    assert entry["holes_hz"] == [[39200.0, 39500.0]]
+    # The average comes first, so k2 fills only the stretch between its bands.
+    assert [(c["source"], c["band_hz"]) for c in entry["coverage"]] == [
+        (average_key, [30000.0, 32500.0]),
+        ("k2", [32500.0, 39200.0]),
+        (average_key, [39500.0, 45000.0]),
+    ]
+    assert entry["gain_correction_spread_db"] is not None
+    nested, small = entry["merged_from"]
+    assert nested["calibration_key"] == average_key
+    assert [s["calibration_key"] for s in nested["average_of"]] == ["k1", "k3"]
+    assert nested["gain_correction_spread_db"] == 2.0
+    assert small["calibration_key"] == "k2" and small["sphere_diameter"] == 22.0
+
+    archive = tmp_path / "archive"
+    save_calibration_archive(
+        archive,
+        single_channel_data=out["single_channel_data"],
+        mapping_dict=out["mapping_dict"],
+        provenance=out["provenance"],
+        verbose=False,
+    )
+    assert (archive / "Standardized_Reports" / f"{merge_key}.yaml").exists()

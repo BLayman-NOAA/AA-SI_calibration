@@ -252,8 +252,24 @@ def verify_additive_effects(gain_results, sa_results, eba_results, sound_speed_r
         print("No valid verification data available.")
     
     print()
-    
+
     return verification_results
+
+
+def _curve_middle(row):
+    """A frequency curve's value in the middle of the span it has values for.
+
+    Args:
+        row: One channel of a ``cal_frequency`` DataArray.
+
+    Returns:
+        float: The interpolated value, or NaN when the row has no values.
+    """
+    known = row.dropna("cal_frequency")
+    if not known.size:
+        return np.nan
+    middle = (float(known["cal_frequency"].min()) + float(known["cal_frequency"].max())) / 2
+    return float(known.interp(cal_frequency=middle))
 
 
 def compare_calibration_parameters(report_params, original_params, echodata):
@@ -312,6 +328,11 @@ def compare_calibration_parameters(report_params, original_params, echodata):
     
     def extract_values(val):
         """Extract values from various data types."""
+        if "cal_frequency" in getattr(val, "dims", ()):
+            return np.array([
+                _curve_middle(val.sel(cal_channel_id=channel_id))
+                for channel_id in val["cal_channel_id"].values
+            ])
         if hasattr(val, 'values'):
             val = val.values
         if isinstance(val, np.ndarray):
@@ -623,13 +644,22 @@ def sv_difference_summary_stats_plot(ds_Sv_baseline, ds_Sv_calibrated, title):
     plt.show()
 
 
-def compute_calibrated_sv_datasets(echodata, report_params):
+def _sv_modes(waveform_mode, encode_mode):
+    """The waveform and encode modes to pass to echopype, leaving out unset ones."""
+    modes = {"waveform_mode": waveform_mode, "encode_mode": encode_mode}
+    return {name: mode for name, mode in modes.items() if mode is not None}
+
+
+def compute_calibrated_sv_datasets(echodata, report_params, waveform_mode=None, encode_mode=None):
     """Compute Sv datasets with individual and combined calibration parameters.
 
     Args:
         echodata: Echopype EchoData object.
         report_params: Consolidated calibration parameters dict with keys
             cal_params, env_params, other_params.
+        waveform_mode: Passed to ``echopype.calibrate.compute_Sv`` when set;
+            EK80 data needs it.
+        encode_mode: Passed to ``echopype.calibrate.compute_Sv`` when set.
 
     Returns:
         dict: Dictionary of unmasked Sv datasets keyed by parameter name:
@@ -642,23 +672,24 @@ def compute_calibrated_sv_datasets(echodata, report_params):
     """
     report_cal_params = report_params["cal_params"]
     report_env_params = report_params["env_params"]
+    modes = _sv_modes(waveform_mode, encode_mode)
 
     sv_datasets = {}
 
     sv_datasets["gain"] = ep.calibrate.compute_Sv(
-        echodata, cal_params={"gain_correction": report_cal_params["gain_correction"]}
+        echodata, **modes, cal_params={"gain_correction": report_cal_params["gain_correction"]}
     )
     sv_datasets["sa"] = ep.calibrate.compute_Sv(
-        echodata, cal_params={"sa_correction": report_cal_params["sa_correction"]}
+        echodata, **modes, cal_params={"sa_correction": report_cal_params["sa_correction"]}
     )
     sv_datasets["eba"] = ep.calibrate.compute_Sv(
-        echodata, cal_params={"equivalent_beam_angle": report_cal_params["equivalent_beam_angle"]}
+        echodata, **modes, cal_params={"equivalent_beam_angle": report_cal_params["equivalent_beam_angle"]}
     )
     sv_datasets["sound_speed"] = ep.calibrate.compute_Sv(
-        echodata, env_params={"sound_speed": report_env_params["sound_speed"]}
+        echodata, **modes, env_params={"sound_speed": report_env_params["sound_speed"]}
     )
     sv_datasets["absorption"] = ep.calibrate.compute_Sv(
-        echodata, env_params={"sound_absorption": report_env_params["sound_absorption"]}
+        echodata, **modes, env_params={"sound_absorption": report_env_params["sound_absorption"]}
     )
 
     cal_params_combined = {
@@ -671,7 +702,7 @@ def compute_calibrated_sv_datasets(echodata, report_params):
         "sound_absorption": report_env_params["sound_absorption"],
     }
     sv_datasets["combined"] = ep.calibrate.compute_Sv(
-        echodata, cal_params=cal_params_combined, env_params=env_params_combined
+        echodata, **modes, cal_params=cal_params_combined, env_params=env_params_combined
     )
 
     return sv_datasets
@@ -776,6 +807,8 @@ def run_full_calibration_comparison(
     echogram_max_depth=1200,
     echogram_ping_min=0,
     echogram_ping_max=1000,
+    waveform_mode=None,
+    encode_mode=None,
 ):
     """Run the full calibration comparison pipeline.
 
@@ -799,6 +832,9 @@ def run_full_calibration_comparison(
         echogram_max_depth: Maximum depth for echogram visualization (default 1200).
         echogram_ping_min: Minimum ping index for echogram visualization (default 0).
         echogram_ping_max: Maximum ping index for echogram visualization (default 1000).
+        waveform_mode: Passed to ``echopype.calibrate.compute_Sv`` when set;
+            EK80 data needs it.
+        encode_mode: Passed to ``echopype.calibrate.compute_Sv`` when set.
 
     Returns:
         dict: Dictionary containing:
@@ -820,9 +856,10 @@ def run_full_calibration_comparison(
 
     if mask_frequencies is None:
         mask_frequencies = [70, 120, 200]
+    modes = _sv_modes(waveform_mode, encode_mode)
 
     # --- Step 2: Calculate Baseline Sv and apply masks ---
-    ds_Sv = ep.calibrate.compute_Sv(echodata)
+    ds_Sv = ep.calibrate.compute_Sv(echodata, **modes)
 
     mask_blank = utils.createSvMask(ds_Sv)
     mask_no_seafloor = utils.remove_seafloor_from_mask(
@@ -844,31 +881,31 @@ def run_full_calibration_comparison(
     # gain correction
     cal_params_gain_only = {'gain_correction': report_cal_params["gain_correction"]}
     ds_Sv_gain_test = utils.apply_mask_to_sv(
-        ep.calibrate.compute_Sv(echodata, cal_params=cal_params_gain_only), mask
+        ep.calibrate.compute_Sv(echodata, **modes, cal_params=cal_params_gain_only), mask
     )
 
     # sa correction
     cal_params_sa_only = {'sa_correction': report_cal_params["sa_correction"]}
     ds_Sv_sa_test = utils.apply_mask_to_sv(
-        ep.calibrate.compute_Sv(echodata, cal_params=cal_params_sa_only), mask
+        ep.calibrate.compute_Sv(echodata, **modes, cal_params=cal_params_sa_only), mask
     )
 
     # equivalent beam angle
     cal_params_eba_only = {'equivalent_beam_angle': report_cal_params["equivalent_beam_angle"]}
     ds_Sv_eba_test = utils.apply_mask_to_sv(
-        ep.calibrate.compute_Sv(echodata, cal_params=cal_params_eba_only), mask
+        ep.calibrate.compute_Sv(echodata, **modes, cal_params=cal_params_eba_only), mask
     )
 
     # sound speed
     env_params_ss_only = {'sound_speed': report_env_params["sound_speed"]}
     ds_Sv_sound_speed_test = utils.apply_mask_to_sv(
-        ep.calibrate.compute_Sv(echodata, env_params=env_params_ss_only), mask
+        ep.calibrate.compute_Sv(echodata, **modes, env_params=env_params_ss_only), mask
     )
 
     # absorption
     env_params_ab_only = {'sound_absorption': report_env_params["sound_absorption"]}
     ds_Sv_absorption_test = utils.apply_mask_to_sv(
-        ep.calibrate.compute_Sv(echodata, env_params=env_params_ab_only), mask
+        ep.calibrate.compute_Sv(echodata, **modes, env_params=env_params_ab_only), mask
     )
 
     # combined
@@ -882,7 +919,7 @@ def run_full_calibration_comparison(
         'sound_absorption': report_env_params["sound_absorption"]
     }
     ds_Sv_combined_test = utils.apply_mask_to_sv(
-        ep.calibrate.compute_Sv(echodata, cal_params=cal_params_combined, env_params=env_params_combined), mask
+        ep.calibrate.compute_Sv(echodata, **modes, cal_params=cal_params_combined, env_params=env_params_combined), mask
     )
 
     # --- Step 4: Calculate effects of each parameter ---

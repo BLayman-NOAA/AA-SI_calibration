@@ -233,7 +233,15 @@
 				"null"
 			],
 			"title": "Averaged record",
-			"description": "True when this record is the average of the calibrations listed in source_filenames, made because a user chose to combine several calibrations that matched the same raw channel. False or null for a record taken from a single calibration."
+			"description": "True when this record is the average of the calibrations listed in source_filenames, made because a user chose to combine several calibrations that matched the same raw channel, or when it is a merge (see is_merged) one of whose parts is such an average. False or null for a record taken from a single calibration."
+		},
+		"is_merged": {
+			"type": [
+				"boolean",
+				"null"
+			],
+			"title": "Merged record",
+			"description": "True when this record was merged from several calibrations of the same channel, usually made with different spheres, as the EK80 software merges them. The calibrations are taken in the order the user gave: the first is used wherever it has a value, and each later one fills only the frequencies the earlier ones leave uncovered. Absent, false or null for a record that was not merged."
 		},
 		"calibration_comments": {
 			"type": [
@@ -491,6 +499,32 @@
 				[18000.0],
 				[38000.0],
 				[70000.0]
+			]
+		},
+		"valid_frequency_bands": {
+			"type": [
+				"array",
+				"null"
+			],
+			"title": "Valid frequency bands",
+			"description": "Frequency bands, as [start, end] pairs, where the calibration sphere's target strength is usable. Read from ValidFrequencyBands in an EK80 calibration file. The gaps between bands are the bands inhibited around the sphere's target strength nulls, and the EK80 software leaves no calibration points in them. Present only on frequency-dependent (FM) records; absent on CW and EK60 records. On an averaged or merged record it is the union of the bands the contributing calibrations cover.",
+			"items": {
+				"type": "array",
+				"items": {
+					"type": "number",
+					"minimum": 0.0
+				},
+				"minItems": 2,
+				"maxItems": 2
+			},
+			"x-units": "Hz",
+			"x-precision": 10,
+			"examples": [
+				[
+					[140000.0, 163000.0],
+					[180000.0, 205000.0],
+					[214000.0, 240000.0]
+				]
 			]
 		},
 		"beamwidth_transmit_major": {

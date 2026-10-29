@@ -107,7 +107,7 @@ def mapping(body):
         # returns empty dictionaries, and this is the only place the client
         # can find the candidates' full records to compare them. Taken from
         # the mapping step, not standardize_cal, because it also carries any
-        # record averaged from a list choice, which the archive call needs.
+        # record averaged or merged from a choice, which the archive call needs.
         "single_channel_data": out["single_channel_data"],
     }
 

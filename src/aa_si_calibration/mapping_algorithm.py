@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from .constants import DEFAULT_TOLERANCES  # noqa: F401  (re-exported)
 from .standardized_file_lib import ensure_string_identifiers as _ensure_string_identifiers
 from . import _console
-from .averaging import average_calibration_records
+from .averaging import average_calibration_records, merge_calibration_records, merge_coverage
 
 from .standardized_file_lib import (
     build_calibration_key,
@@ -31,7 +31,11 @@ from .standardized_file_lib import (
     json_safe,
     normalize_calibration_date,
 )
-from .calibration_keys import build_average_calibration_key, join_calibration_dates
+from .calibration_keys import (
+    build_average_calibration_key,
+    build_merge_calibration_key,
+    join_calibration_dates,
+)
 
 
 @dataclass
@@ -75,6 +79,10 @@ class MappingResult:
         multiplexing_warnings: List of multiplexing warnings
         averaged: Maps the key of each record averaged while resolving
             conflicts -> {source calibration key: source record}
+        merged: Maps the key of each record merged while resolving conflicts
+            -> {source key: source record}, in priority order. A source key
+            may be that of an average made in the same choice, listed in
+            ``averaged``.
     """
     mapping_dict: Dict[str, Dict[str, str]] = field(default_factory=dict)
     calibration_dict: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -87,6 +95,7 @@ class MappingResult:
     multiple_matches: List[MultipleMatchChannel] = field(default_factory=list)
     multiplexing_warnings: List[MultiplexingWarning] = field(default_factory=list)
     averaged: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
+    merged: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
 
     def print_summary(self):
         """Print a summary of the mapping results."""
@@ -1119,29 +1128,143 @@ def describe_conflicts(result: MappingResult) -> dict:
     return json_safe(described)
 
 
-def _selected_keys(conflict_id: str, chosen, candidate_keys: List[str]) -> List[str]:
-    """The candidate keys one decision names, as a list."""
-    if isinstance(chosen, str):
-        selected = [chosen]
-    elif isinstance(chosen, (list, tuple)) and chosen:
-        selected = list(chosen)
-    else:
-        raise ValueError(
-            f"The choice for {conflict_id} must be a calibration key, or a list "
-            f"of keys to average, not {chosen!r}."
-        )
-    for key in selected:
+def _parse_choice(conflict_id: str, chosen, candidate_keys: List[str]):
+    """One decision as a tree of the candidate keys it names.
+
+    Returns:
+        A key to keep, ``("average", [key, ...])``, or ``("merge", [item,
+        ...])`` whose items are keys or averages. A one-item form is its item.
+
+    Raises:
+        ValueError: If the choice is malformed, nests a form where it cannot
+            go, names a key that is not a candidate, or names one twice.
+    """
+    tree = _choice_tree(conflict_id, chosen, inside=None)
+    leaves = list(_choice_leaves(tree))
+    for key in leaves:
         if key not in candidate_keys:
             raise ValueError(
                 f"{key!r} is not a candidate for {conflict_id}. "
                 f"Candidates: {', '.join(candidate_keys)}."
             )
-    if len(set(selected)) != len(selected):
+    if len(set(leaves)) != len(leaves):
         raise ValueError(
             f"The choice for {conflict_id} names a calibration more than once: "
-            f"{', '.join(selected)}."
+            f"{', '.join(leaves)}."
         )
-    return selected
+    return tree
+
+
+def _choice_tree(conflict_id, chosen, inside):
+    """Normalize one choice, or one item of a choice, into a tree."""
+    if isinstance(chosen, str):
+        return chosen
+    if isinstance(chosen, (list, tuple)):
+        kind, items = "average", chosen
+    elif (
+        isinstance(chosen, dict) and len(chosen) == 1
+        and next(iter(chosen)) in ("average", "merge")
+    ):
+        kind, items = next(iter(chosen.items()))
+    else:
+        kind, items = None, None
+    if kind is None or not isinstance(items, (list, tuple)) or not items:
+        raise ValueError(
+            f"The choice for {conflict_id} must be a calibration key, a list of "
+            f"keys to average, {{'average': [keys]}}, or {{'merge': [keys]}}, "
+            f"not {chosen!r}."
+        )
+    if inside == "average" or (inside == "merge" and kind == "merge"):
+        raise ValueError(
+            f"The choice for {conflict_id} nests {kind} inside {inside}. A merge "
+            f"may contain averages; nothing else can be nested."
+        )
+    children = [_choice_tree(conflict_id, item, inside=kind) for item in items]
+    if len(children) == 1:
+        return children[0]
+    return (kind, children)
+
+
+def _choice_leaves(tree):
+    """The candidate keys, or option numbers, a choice tree names, in order."""
+    if not isinstance(tree, tuple):
+        yield tree
+        return
+    for item in tree[1]:
+        yield from _choice_leaves(item)
+
+
+def _combine_choice(result, tree, record_author, short_filenames, made):
+    """Make the records a choice tree describes, bottom up.
+
+    Args:
+        result: MappingResult holding the candidate records.
+        tree: From :func:`_parse_choice`.
+        record_author: Recorded as the author of each new record.
+        short_filenames: Naming style for new records.
+        made: Filled with ``{key: (kind, source keys, record)}`` for every
+            record made, nested averages included.
+
+    Returns:
+        str: The key the choice resolves to.
+    """
+    if isinstance(tree, str):
+        return tree
+    kind, items = tree
+    if kind == "average":
+        key, record = average_candidates(result, items, record_author, short_filenames)
+        made[key] = ("average", list(items), record)
+        return key
+    keys = [_combine_choice(result, item, record_author, short_filenames, made) for item in items]
+    records = [
+        {**made[k][2], "_calibration_file_key": k} if k in made else _loaded(result, k, "merged")
+        for k in keys
+    ]
+    key, record = _merged(records, keys, record_author, short_filenames)
+    made[key] = ("merge", keys, record)
+    return key
+
+
+def _loaded(result, cal_key, verb):
+    """The loaded record of a calibration key, or a ValueError."""
+    if cal_key not in result.calibration_dict:
+        raise ValueError(
+            f"No calibration record is loaded for {cal_key}, so it cannot be {verb}."
+        )
+    return result.calibration_dict[cal_key]
+
+
+def _merged(records, keys, record_author, short_filenames):
+    """Merge records in priority order and key the result."""
+    record = merge_calibration_records(records, record_author=record_author)
+    return build_merge_calibration_key(record, keys, short_filenames), record
+
+
+def merge_candidates(
+    result: MappingResult,
+    cal_keys: List[str],
+    record_author: str = None,
+    short_filenames: bool = True,
+) -> Tuple[str, Dict[str, Any]]:
+    """Merge the records behind several calibration keys, EK80 style.
+
+    Args:
+        result: MappingResult holding the records in ``calibration_dict``.
+        cal_keys: The keys to merge, in priority order: the first is used
+            wherever it has a value.
+        record_author: Recorded as the author of the merged record.
+        short_filenames: Passed to
+            :func:`calibration_keys.build_merge_calibration_key`.
+
+    Returns:
+        tuple: ``(key, record)`` for the merged record. Nothing is written.
+
+    Raises:
+        ValueError: If a record is not loaded, or the records cannot be
+            merged.
+    """
+    records = [_loaded(result, k, "merged") for k in cal_keys]
+    return _merged(records, cal_keys, record_author, short_filenames)
 
 
 def average_candidates(
@@ -1194,12 +1317,14 @@ def apply_conflict_choices(
     the rest stay on ``result.multiple_matches`` for the caller to report or
     raise on.
 
-    A decision naming several candidates averages them. The average is written
-    as a new single-channel file, the conflict's channels are mapped to it, and
-    the candidates it was made from are set aside like any other loser. Every
-    decision is checked, and every average computed, before anything changes,
-    so a decision that cannot be honoured leaves the result and the folder as
-    they were.
+    A decision naming several candidates averages or merges them. The new
+    record is written as a single-channel file, the conflict's channels are
+    mapped to it, and the candidates it was made from are set aside like any
+    other loser. An average made only to be merged is not written; it is listed
+    in ``result.averaged`` and the merge in ``result.merged``. Every decision is
+    checked, and every record computed, before anything changes, so a decision
+    that cannot be honoured leaves the result and the folder as they were. A
+    merge that leaves part of the band uncovered is applied with a warning.
 
     A calibration key is removed only once nothing still needs it: not kept by
     another conflict, not a candidate of one that has not been decided yet, and
@@ -1209,24 +1334,27 @@ def apply_conflict_choices(
 
     Args:
         result: MappingResult from :func:`build_mapping`, modified in place.
-        choices: ``{conflict_id: key}`` to keep one candidate, or
-            ``{conflict_id: [key, ...]}`` to average several. A one-item list
-            is the same as the key alone.
+        choices: ``{conflict_id: choice}``. A choice is a key to keep one
+            candidate; a list of keys, or ``{"average": [key, ...]}``, to
+            average them; or ``{"merge": [item, ...]}`` to merge them in
+            priority order, where an item is a key or an
+            ``{"average": [...]}``. A one-item form is the same as its item.
         cal_files_dir: Directory holding the single-channel files. When None no
             file is touched and only the in-memory result changes.
         keep_unused: If True, move rejected files to *unused_dir*.
         unused_dir: Destination directory for rejected files.
-        record_author: Recorded as the author of any averaged record.
-        short_filenames: If True, an averaged record gets a compact
-            ``<dates>__<frequency>__average-<digest>`` key; otherwise the
-            digest is appended to its full calibration key.
+        record_author: Recorded as the author of any averaged or merged record.
+        short_filenames: If True, a new record gets a compact
+            ``<dates>__<frequency>__average-<digest>`` or ``...__merge-<digest>``
+            key; otherwise the digest is appended to its full calibration key.
 
     Returns:
         set: The calibration keys that were removed.
 
     Raises:
-        ValueError: For an unknown conflict id, a choice that is not one of
-            that conflict's candidates, or candidates that cannot be averaged.
+        ValueError: For an unknown conflict id, a malformed choice, a key that
+            is not one of that conflict's candidates, or candidates that cannot
+            be averaged or merged.
     """
     if not choices:
         return set()
@@ -1240,23 +1368,18 @@ def apply_conflict_choices(
         )
 
     decisions = {}
-    averages = {}
+    made = {}
     for conflict_id, chosen in choices.items():
-        selected = _selected_keys(conflict_id, chosen, _candidate_keys(groups[conflict_id]))
-        if len(selected) == 1:
-            decisions[conflict_id] = selected[0]
-            continue
+        tree = _parse_choice(conflict_id, chosen, _candidate_keys(groups[conflict_id]))
         try:
-            average_key, record = average_candidates(
-                result, selected, record_author, short_filenames
+            decisions[conflict_id] = _combine_choice(
+                result, tree, record_author, short_filenames, made
             )
         except ValueError as err:
             raise ValueError(f"{conflict_id}: {err}") from err
-        averages[average_key] = (selected, record)
-        decisions[conflict_id] = average_key
 
     return _apply_decisions(
-        result, groups, decisions, averages, cal_files_dir, keep_unused, unused_dir
+        result, groups, decisions, made, cal_files_dir, keep_unused, unused_dir
     )
 
 
@@ -1264,7 +1387,7 @@ def _apply_decisions(
     result: MappingResult,
     groups: Dict[str, List[MultipleMatchChannel]],
     decisions: Dict[str, str],
-    averages: Dict[str, Tuple[List[str], Dict[str, Any]]],
+    made: Dict[str, Tuple[str, List[str], Dict[str, Any]]],
     cal_files_dir: str | Path = None,
     keep_unused: bool = False,
     unused_dir: str | Path = None,
@@ -1275,8 +1398,11 @@ def _apply_decisions(
         result: MappingResult from :func:`build_mapping`, modified in place.
         groups: The conflicts, from :func:`group_conflicts`.
         decisions: ``{conflict_id: key to map its channels to}``, a candidate
-            or the key of an entry in *averages*.
-        averages: ``{average key: (source keys, averaged record)}``.
+            or the key of an entry in *made*.
+        made: ``{key: (kind, source keys, record)}`` for every average and
+            merge the decisions made. Only those a decision maps to are kept
+            and written; an average made only to be merged is recorded in
+            ``result.averaged`` alone.
         cal_files_dir: Directory holding the single-channel files, or None to
             touch no file.
         keep_unused: If True, move rejected files to *unused_dir*.
@@ -1320,18 +1446,26 @@ def _apply_decisions(
     removable = rejected_keys - kept_keys - still_contested - still_mapped
 
     # Recorded before the sources are dropped from calibration_dict below, so
-    # the provenance report can still say what went into each average.
-    for average_key, (sources, record) in averages.items():
-        result.averaged[average_key] = {k: result.calibration_dict[k] for k in sources}
-        result.calibration_dict[average_key] = {**record, "_calibration_file_key": average_key}
+    # the provenance report can still say what went into each record.
+    decided = set(decisions.values())
+    for key, (kind, sources, record) in made.items():
+        listed = result.merged if kind == "merge" else result.averaged
+        listed[key] = {
+            k: {**made[k][2], "_calibration_file_key": k} if k in made
+            else result.calibration_dict[k]
+            for k in sources
+        }
+        if key in decided:
+            result.calibration_dict[key] = {**record, "_calibration_file_key": key}
 
     if cal_files_dir is not None:
         cal_files_dir = Path(cal_files_dir)
         if unused_dir is not None:
             unused_dir = Path(unused_dir)
-        for average_key, (_, record) in averages.items():
-            with open(cal_files_dir / f"{average_key}.yaml", "w") as f:
-                f.write(dump_channel_yaml(record))
+        for key, (_, _, record) in made.items():
+            if key in decided:
+                with open(cal_files_dir / f"{key}.yaml", "w") as f:
+                    f.write(dump_channel_yaml(record))
         for cal_key in sorted(removable):
             cal_file = cal_files_dir / f"{calibration_key_to_filename(cal_key)}.yaml"
             if cal_file.exists():
@@ -1344,7 +1478,35 @@ def _apply_decisions(
     result.multiple_matches[:] = [
         mm for mm in result.multiple_matches if id(mm) not in resolved
     ]
+
+    for key, (kind, _, _) in made.items():
+        if kind == "merge":
+            warning = merge_hole_warning(key, list(result.merged[key].values()))
+            if warning:
+                _console.console_print(warning)
     return removable
+
+
+def merge_hole_warning(key, sources):
+    """The warning for a merged record that leaves part of its band uncovered.
+
+    Args:
+        key: The merged record's key.
+        sources: The records it was merged from, in priority order.
+
+    Returns:
+        str | None: The warning, or None when the sources cover the band.
+    """
+    holes = merge_coverage(sources)["holes_hz"]
+    if not holes:
+        return None
+    bands = " and ".join(f"{low:.0f}-{high:.0f} Hz" for low, high in holes)
+    return (
+        f"WARNING: {key} has no calibration in {bands}. None of the merged "
+        f"calibrations is valid there. At a ping whose centre frequency falls in "
+        f"a gap inside the band echopype interpolates across it, and at the "
+        f"edge of the band it gives NaN."
+    )
 
 
 def _render_conflict_block(
@@ -1378,15 +1540,38 @@ def _render_conflict_block(
     return "\n".join(lines)
 
 
-def _parse_selection(text: str, count: int) -> Optional[List[int]]:
-    """Option indices from a typed answer such as ``2`` or ``1,3``, or None."""
-    parts = [p.strip() for p in text.split(",")]
-    if not all(p.isdigit() and 1 <= int(p) <= count for p in parts):
+def _parse_selection(text: str, count: int):
+    """A choice tree of option numbers from a typed answer, or None if invalid.
+
+    ``2`` keeps one option, ``1,3`` averages, ``1>2`` merges with 1 first, and
+    ``(1,2)>3`` or ``1,2>3`` averages 1 and 2 and merges the result over 3.
+    """
+    def group(part):
+        part = part.strip()
+        if part.startswith("(") and part.endswith(")"):
+            part = part[1:-1]
+        numbers = [p.strip() for p in part.split(",")]
+        if not all(p.isdecimal() and 1 <= int(p) <= count for p in numbers):
+            return None
+        numbers = [int(p) for p in numbers]
+        return numbers[0] if len(numbers) == 1 else ("average", numbers)
+
+    groups = [group(part) for part in text.split(">")]
+    if any(g is None for g in groups):
         return None
-    indices = [int(p) for p in parts]
-    if len(set(indices)) != len(indices):
+    tree = groups[0] if len(groups) == 1 else ("merge", groups)
+    leaves = list(_choice_leaves(tree))
+    if len(set(leaves)) != len(leaves):
         return None
-    return indices
+    return tree
+
+
+def _tree_keys(tree, candidate_keys):
+    """A choice tree of option numbers with each number replaced by its key."""
+    if isinstance(tree, int):
+        return candidate_keys[tree - 1]
+    kind, items = tree
+    return (kind, [_tree_keys(item, candidate_keys) for item in items])
 
 
 def resolve_conflicts_interactive(
@@ -1401,16 +1586,17 @@ def resolve_conflicts_interactive(
 
     When a raw channel matches more than one calibration file, this function
     groups the conflicts, presents the options, and asks the user which file
-    to keep, or which several to average. Rejected files are either deleted or
-    moved depending on *keep_unused*. The *result* object is modified in-place.
+    to keep, or which several to average or merge. Rejected files are either
+    deleted or moved depending on *keep_unused*. The *result* object is
+    modified in-place.
 
     Args:
         result: MappingResult from :func:`build_mapping` (modified in-place).
         cal_files_dir: Directory containing the single-channel ``.yaml`` files.
         keep_unused: If True, move rejected files to *unused_dir*.
         unused_dir: Destination directory for rejected files.
-        record_author: Recorded as the author of any averaged record.
-        short_filenames: Naming style for averaged records, as in
+        record_author: Recorded as the author of any averaged or merged record.
+        short_filenames: Naming style for averaged and merged records, as in
             :func:`apply_conflict_choices`.
     """
     if not result.multiple_matches:
@@ -1421,10 +1607,11 @@ def resolve_conflicts_interactive(
     print(f"\nConflict: {len(groups)} unique raw configuration(s) matched multiple "
           f"calibration files.")
     print("You will be prompted to choose which file to keep for each conflict.")
-    print("Enter several numbers separated by commas to average those files instead.\n")
+    print("Enter 1,2 to average files, 1>2 to merge them with 1 used first "
+          "(EK80 style), or (1,2)>3 to average 1 and 2 and merge the result over 3.\n")
 
     decisions = {}
-    averages = {}
+    made = {}
     for conflict_num, (conflict_id, channels) in enumerate(groups.items(), start=1):
         candidate_keys = _candidate_keys(channels)
         option_block = _render_conflict_block(
@@ -1435,27 +1622,27 @@ def resolve_conflicts_interactive(
         context = option_block
         while True:
             choice = _console.prompt(
-                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP, OR SEVERAL SEPARATED "
-                f"BY COMMAS TO AVERAGE THEM (1-{len(candidate_keys)}): ",
+                f"\n>>> ENTER THE NUMBER OF THE FILE TO KEEP, 1,2 TO AVERAGE, OR "
+                f"1>2 TO MERGE (1-{len(candidate_keys)}): ",
                 context=context,
             ).strip()
             indices = _parse_selection(choice, len(candidate_keys))
             if indices is None:
                 invalid = (
                     f"    INVALID INPUT. PLEASE ENTER A NUMBER BETWEEN 1 AND "
-                    f"{len(candidate_keys)}, OR SEVERAL SEPARATED BY COMMAS."
+                    f"{len(candidate_keys)}, SEVERAL SEPARATED BY COMMAS, OR "
+                    f"SEVERAL SEPARATED BY >."
                 )
             else:
-                selected = [candidate_keys[i - 1] for i in indices]
-                if len(selected) == 1:
-                    break
+                tree = _tree_keys(indices, candidate_keys)
+                attempt = {}
                 try:
-                    average_key, record = average_candidates(
-                        result, selected, record_author, short_filenames
+                    kept = _combine_choice(
+                        result, tree, record_author, short_filenames, attempt
                     )
                     break
                 except ValueError as err:
-                    invalid = f"    THESE FILES CANNOT BE AVERAGED. {err}"
+                    invalid = f"    THESE FILES CANNOT BE COMBINED. {err}"
             print(invalid)
             # The options are already on screen; repeat only the correction.
             context = invalid
@@ -1463,19 +1650,20 @@ def resolve_conflicts_interactive(
         # The typed answer is not echoed into the log, so record it.
         print(f"  Selected: {choice}")
         action_word = "Moving" if keep_unused else "Deleting"
-        if len(selected) == 1:
-            decisions[conflict_id] = selected[0]
-            print(f"\n  Keeping: {selected[0]}.yaml")
+        decisions[conflict_id] = kept
+        made.update(attempt)
+        if isinstance(tree, str):
+            print(f"\n  Keeping: {kept}.yaml")
         else:
-            decisions[conflict_id] = average_key
-            averages[average_key] = (selected, record)
-            print(f"\n  Averaging {len(selected)} files into: {average_key}.yaml")
+            verb = "Merging" if tree[0] == "merge" else "Averaging"
+            count = len(list(_choice_leaves(tree)))
+            print(f"\n  {verb} {count} files into: {kept}.yaml")
         for rk in candidate_keys:
-            if len(selected) > 1 or rk not in selected:
+            if rk != kept:
                 print(f"  {action_word}: {rk}.yaml")
 
     _apply_decisions(
-        result, groups, decisions, averages, cal_files_dir, keep_unused, unused_dir
+        result, groups, decisions, made, cal_files_dir, keep_unused, unused_dir
     )
 
     print("\nAll conflicts resolved.")

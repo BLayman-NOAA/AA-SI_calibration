@@ -23,7 +23,7 @@ sizing a Cloud Run instance, see
 | Call | Recipe | What it does | Cost |
 | --- | --- | --- | --- |
 | `POST /calibration/standardize` | [calibration_standardize.yaml](calibration_standardize.yaml) | Parses the manufacturer files into one standardized record per channel and returns them for review. | Minutes. Scans every raw file in the window. |
-| `POST /calibration/mapping` | [calibration_mapping.yaml](calibration_mapping.yaml) | Matches raw channels against the reviewed records. Reports ambiguity instead of guessing. Called again with the user's choices, each one candidate to keep or several to average, until nothing is ambiguous. | Seconds, with the scan cached. |
+| `POST /calibration/mapping` | [calibration_mapping.yaml](calibration_mapping.yaml) | Matches raw channels against the reviewed records. Reports ambiguity instead of guessing. Called again with the user's choices, each one candidate to keep or several to average or merge, until nothing is ambiguous. | Seconds, with the scan cached. |
 | `POST /calibration/archive` | [save_calibration.yaml](save_calibration.yaml) | Writes the finished calibration to the survey's archive folder. | Seconds. |
 | `DELETE /calibration/cache` | none | Deletes the cached raw file scan for one survey once it is submitted. | Seconds. |
 
@@ -41,11 +41,12 @@ status codes under [Errors](#errors).
 ## Why three calls
 
 Duplicate calibration files are only detectable at mapping time, and a person
-has to choose between them, or decide to average them: two calibrations of the
+has to choose between them, or decide to combine them: two calibrations of the
 same transducer on the same day often differ only in a parameter such as
 transmit power, while a pre-cruise and a post-cruise calibration are often
-meant to be combined. That decision cannot be made before the run, and it
-cannot be made by the server.
+meant to be averaged, and calibrations made with two spheres are meant to be
+merged. That decision cannot be made before the run, and it cannot be made by
+the server.
 
 So the pipeline splits where the human belongs. Between call 1 and call 2 the
 user edits values, corrects dates, and discards channels. The edited set comes
@@ -84,7 +85,7 @@ sequenceDiagram
     S-->>B: 200 { conflicts }
     deactivate S
 
-    Note over B: user picks a winner,<br/>or several to average,<br/>per conflict
+    Note over B: user picks a winner,<br/>or several to average or merge,<br/>per conflict
 
     B->>S: POST /calibration/mapping + calibration_choices
     S-->>B: 200 { mapping_dict, conflicts: {}, provenance, single_channel_data }
@@ -200,7 +201,7 @@ Matches each raw channel to its calibration. Takes every field from
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `override_channels` | object | no | The reviewed channels, in the exact shape `single_channel_data` came back in. Omit an entry to discard that channel; edit values in place to correct them. Omitting the field entirely re-parses the manufacturer files. |
-| `calibration_choices` | object | no | `{conflict_id: chosen_cal_key}` from a previous response, or `{conflict_id: [cal_key, ...]}` to average several candidates. A partial map resolves what it covers and reports the rest. See [Averaging candidates](#averaging-candidates). |
+| `calibration_choices` | object | no | `{conflict_id: chosen_cal_key}` from a previous response, `{conflict_id: [cal_key, ...]}` to average several candidates, or `{conflict_id: {"merge": [cal_key, ...]}}` to merge them in priority order. A partial map resolves what it covers and reports the rest. See [Combining candidates](#combining-candidates). |
 
 Conflicts are always handled in report mode: the call returns them and writes
 no mapping until they are resolved. The recipe's other modes raise or prompt
@@ -215,7 +216,7 @@ Returned on both branches.
 | `conflicts` | object | Unresolved ambiguity. Empty when a mapping was written. See [Conflict object](#conflict-object). |
 | `mapping_dict` | object | `{raw filename: {channel_id: cal_key}}`. Empty while a conflict stands. |
 | `calibration_dict` | object | The calibration values behind each key in the mapping. Empty while a conflict stands. |
-| `single_channel_data` | object | The channel set the mapping was built from, carrying its final file keys, plus any record this call averaged. Every key in `mapping_dict` names one of these. |
+| `single_channel_data` | object | The channel set the mapping was built from, carrying its final file keys, plus any record this call averaged or merged. Every key in `mapping_dict` names one of these. |
 | `provenance` | object | What calibration was applied over which stretch of the survey, and why, per channel. See [Provenance object](#provenance-object). |
 | `provenance_path` | string | Where the same report was written as YAML inside the container. Useful in logs; the client cannot read it, and does not need to, because `provenance` is the same content. |
 
@@ -307,10 +308,17 @@ candidate in an undecided one is left alone until that conflict is settled too.
 So is a key that some other raw channel matched on its own: it stays that
 channel's calibration.
 
-### Averaging candidates
+### Combining candidates
 
-Answer a conflict with a list of candidate keys instead of one key, and the
-server averages them. Nothing is averaged unless a list is sent.
+A conflict can also be answered with several of its candidates, combined in
+one of two ways. Nothing is combined unless the choice asks for it.
+
+| Choice | Effect |
+| --- | --- |
+| `"<key>"` | Keep that candidate. |
+| `["<key>", "<key>"]` or `{"average": ["<key>", "<key>"]}` | Average them. For repeat calibrations of the same transducer with the same sphere, such as one before and one after a cruise. See [Averaging](#averaging). |
+| `{"merge": ["<key>", "<key>"]}` | Merge them in the order given, as the EK80 software merges calibrations made with different spheres. FM only. See [Merging](#merging). |
+| `{"merge": [{"average": ["<key>", "<key>"]}, "<key>"]}` | Average the first two, then merge the average over the third. |
 
 ```json
 {
@@ -318,26 +326,41 @@ server averages them. Nothing is averaged unless a list is sent.
     "conflict-91bf977e42de": [
       "2023-06-27__38000__config-1",
       "2023-08-14__38000__config-1"
-    ]
+    ],
+    "conflict-2e78a485f716": {
+      "merge": ["2023-07-21__200000__config-1", "2023-07-20__200000__config-2"]
+    }
   }
 }
 ```
 
+These rules apply to both:
+
 - **Any two or more candidates of that conflict.** Candidates left out of the
-  list are losers, as with a single choice. A one-item list is the same as
-  sending that key alone.
-- **The average becomes a new standardized file.** Its key has the form
+  choice are losers, as with a single choice. A one-item list or mapping is
+  the same as sending that key alone. A key may appear only once in a choice.
+- **Only an average nests.** A merge item may be an `{"average": [...]}`.
+  Nothing else can be nested, and a mapping must have exactly one key,
+  `average` or `merge`.
+- **The result becomes a new standardized file.** An average is keyed
   `<dates>__<frequency>__average-<digest>`, for example
-  `2023-06-27+2023-08-14__38000__average-91bf97`. The digest comes from the
-  sorted source keys, so the same list gives the same key on every call. The
-  conflict's channels are mapped to it, and the averaged candidates move to
-  `unused_calibration_files/` like any other loser.
+  `2023-06-27+2023-08-14__38000__average-91bf97`, the digest taken over the
+  sorted source keys. A merge is keyed `<dates>__<frequency>__merge-<digest>`,
+  the digest taken over the keys in the order sent, because the order decides
+  the result. A nested average enters the merge's digest as its own average
+  key. Either way the same choice gives the same key on every call. The
+  conflict's channels are mapped to the new file, and every candidate it was
+  made from moves to `unused_calibration_files/` like any other loser.
 - **It comes back on `single_channel_data`.** The standardize call never sees
-  an average, so the mapping response's `single_channel_data` is the only
-  place its record is. Send that one to the archive call.
-- **All or nothing.** Every choice in the request is checked, and every
-  average computed, before anything changes. One refused average means no
-  choice in that request is applied.
+  a combined record, so the mapping response's `single_channel_data` is the
+  only place its record is. Send that one to the archive call. An average made
+  only to be merged is not written and does not come back; the provenance
+  describes it.
+- **All or nothing.** Every choice in the request is checked, and every record
+  computed, before anything changes. One refused combination means no choice
+  in that request is applied.
+
+#### Averaging
 
 Every source counts equally, and a null in one source is skipped rather than
 counted. Each field is combined according to what it measures:
@@ -349,14 +372,14 @@ counted. Each field is combined according to what it measures:
 | Averaged as they are | the four `beamwidth_*` fields, `echoangle_major`, `echoangle_minor`, both `echoangle_*_sensitivity` fields, `absorption_indicative`, `sound_speed_indicative`, `temperature`, `salinity`, `acidity`, `pressure` |
 | Every source's entries, in date order | `calibration_date`, `source_filenames`, `source_file_paths` |
 | Kept when the sources agree, otherwise joined with `; ` | `calibration_comments`, `calibration_version`, `calibration_acquisition_method`, `source_file_location`, `sonar_software_version`, `sonar_software_name` |
-| Set new | `record_created` (now), `record_author` (the request's `record_author`), `is_averaged` (`true`) |
+| Set new | `record_created` (now), `record_author` (the request's `record_author`), `is_averaged` (`true`), and for FM `valid_frequency_bands` (the union of the bands the sources cover) |
 
 The must-agree fields are the hardware, the settings a gain applies to, and the
 sphere it was measured with. A gain measured with any of them different is a
 measurement of something else. The frequency and power fields are compared
 within the matcher's default tolerances (1 Hz, 1 W, 1 µs), never a widened
-one. An averaged record cannot itself be averaged again, because its sources
-would be counted twice.
+one. An averaged or merged record cannot itself be averaged, because its
+sources would be counted twice.
 
 A null is read two ways. For the settings and the sphere (`channel`,
 `pulse_form`, the frequency fields, `transmit_power`,
@@ -371,17 +394,21 @@ value the other sources give.
 
 The three RL2307 conflicts described under
 [Comparing candidates](#comparing-candidates), a 38.1 mm sphere calibration
-against a 25 mm one, are refused. The error names the field and both values.
+against a 25 mm one, are refused as averages. The error names the field and
+both values. Calibrations with different spheres are combined by merging
+instead.
 
-FM records are averaged over the union of their frequency points. Each source
-is interpolated onto those points but not extrapolated, so a point only one
-calibration covers carries that calibration alone. This is how pyEchoLab's
-`get_calibration_from_xml` combines EK80 files. One difference: a source with
-a null at one of its own points is not interpolated across it, so that point
-and the gaps either side of it carry the other sources alone. Calibrations made with
-different spheres are refused for FM as well, even when their bands do not
-overlap, because the files do not record which parts of the band each sphere
-is valid for.
+FM records are averaged over the union of their frequency points. A source has
+values only where it is valid: inside each of its `valid_frequency_bands`,
+between the first and last of its points there, or across all its points when
+the record has no bands. Each source is interpolated onto the union only
+within those stretches, never extrapolated and never carried across a gap, so
+a point only one calibration covers carries that calibration alone. A null at
+one of a source's own points is treated the same way: that point and the
+stretches either side of it carry the other sources alone. This follows
+pyEchoLab's `get_calibration_from_xml`, except that pyEchoLab interpolates a
+source across the inhibited band around its sphere's null, where the source
+has no points, and this does not.
 
 An averaged record, abridged:
 
@@ -406,14 +433,80 @@ An averaged record, abridged:
 }
 ```
 
-Two things a client must not do:
+#### Merging
 
-- **Do not send the average back in `override_channels`.** Keep resending the
-  original reviewed channels and the list choice. If the average and its
+A merge combines FM calibrations of one channel made with different spheres,
+as the EK80 software does. Each sphere's target strength has nulls inside the
+band, and the EK80 calibration leaves no points in the band it inhibits around
+each null. Its file records where the sphere is valid in `ValidFrequencyBands`,
+which becomes the record's `valid_frequency_bands`.
+
+- **The order decides.** The first calibration is used wherever it is valid.
+  Each later one fills only the frequencies the earlier ones leave uncovered.
+  The EK80 software puts the most recent sphere first; here the order is the
+  caller's, and the provenance records it.
+- **Only measured points.** The merged record holds each calibration's own
+  points in the stretches it supplies, and every field at a point comes from
+  the calibration that measured it; a value that calibration leaves null stays
+  null. Nothing is interpolated or averaged, including where the calibrations
+  overlap. Values with one entry per record,
+  such as `equivalent_beam_angle` and the environment, come from the first
+  calibration that has them.
+- **The sphere may differ; nothing else may.** Every must-agree field of an
+  average must still agree, except `sphere_diameter` and `sphere_material`.
+  The merged record's `sphere_diameter` is null when the spheres differ, and
+  `sphere_material` is joined. Read each sphere from the provenance.
+- **FM only.** A CW calibration has one frequency point, so there is nothing
+  to fill. CW candidates are refused; select one of them instead.
+- **Not twice.** A merged record cannot be merged again. Merge the
+  calibrations it was made from instead.
+- **Holes warn, never fail.** A frequency between `frequency_start` and
+  `frequency_end` that no calibration covers stays uncovered. Coverage is
+  measured from each sphere's valid band edges, as the EK80 software measures
+  it, so the ordinary spacing between points is not a hole. The merge is
+  applied, the server logs a warning, and the provenance lists the gap under
+  `holes_hz`. echopype calibrates a ping at its transmit centre frequency: if
+  the centre falls in a hole inside the band it interpolates across it, and at
+  the edge of the band it gives NaN. Check the holes against the channel's
+  centre frequency.
+
+The merged record carries `is_merged: true`, and `is_averaged: true` as well
+when one of its items is an average. `calibration_date` and `source_filenames`
+list every source in merge order, and `valid_frequency_bands` is the union of
+what they cover.
+
+The example cruise's ES200 was calibrated with a 38.1 mm sphere on 2023-07-20
+and a 22 mm sphere on 2023-07-21. The 38.1 mm sphere is not valid from 205 to
+214 kHz, which holds the channel's 210 kHz centre frequency. Merging the
+22 mm calibration over it covers 210 kHz and leaves two holes:
+
+```json
+{
+  "_calibration_file_key": "2023-07-21+2023-07-20__200000__merge-67b552",
+  "channel": "ES200-7C Serial No: 0",
+  "calibration_date": ["2023-07-21", "2023-07-20"],
+  "is_averaged": false,
+  "is_merged": true,
+  "sphere_diameter": null,
+  "sphere_material": "tungsten carbide",
+  "frequency_start": 160000.0,
+  "frequency_end": 260000.0,
+  "valid_frequency_bands": [
+    [160000.0, 163000.0], [170010.0, 240000.0], [245000.0, 260000.0]
+  ],
+  "frequency": [160000.0, 161001.0, "...", 260000.0],
+  "gain_correction": [22.07, 22.62, "...", 23.78]
+}
+```
+
+Two things a client must not do, whether averaging or merging:
+
+- **Do not send the new record back in `override_channels`.** Keep resending
+  the original reviewed channels and the choice. If the new record and its
   sources are all sent as overrides, they match the same raw channels and the
-  next call reports a three-way conflict.
-- **Do not drop the list from later calls.** Rule 2 above applies: the
-  average is recomputed from the choice on every call, and the same list
+  next call reports a larger conflict.
+- **Do not drop the choice from later calls.** Rule 2 above applies: the
+  record is recomputed from the choice on every call, and the same choice
   yields the same key, so only `record_created` changes.
 
 ## POST /calibration/archive
@@ -582,6 +675,8 @@ required; every other field may be `null`. Abridged from a real generated file:
 | Degree fields | nulled if out of range | Angles outside the schema's range are replaced with `null` and a warning is logged. |
 | `calibration_date` | a list of strings | One date per calibration behind the record, so one for an ordinary record. A bare string from an older client is accepted and read as a one-item list. Dates in a recognized format are rewritten as YYYY-MM-DD. |
 | `is_averaged` | `true` only for an average | Set by the server when it averages candidates. A reviewed record should leave it `false`. |
+| `is_merged` | present only on a merge | Set by the server when it merges candidates. A reviewed record should not carry it. |
+| `valid_frequency_bands` | present only on FM records | The `[start, end]` bands, in Hz, where the calibration sphere is valid, read from the EK80 file. Leave it as parsed: a merge relies on it to know where each calibration has values. |
 
 ## Conflict object
 
@@ -632,7 +727,7 @@ filename: date alone would show the user two identical-looking options.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `candidate_keys` | string[] | The calibration keys in contention. One of these is sent back as the choice, or several of them as a list to average. |
+| `candidate_keys` | string[] | The calibration keys in contention. One of these is sent back as the choice, or several of them to average or merge. |
 | `candidates` | object[] | A summary of each candidate, enough to label it in a list. Not the full record; see [Comparing candidates](#comparing-candidates). |
 | `distinguishing_fields` | string[] | Names of the fields whose values actually differ between the candidates. Empty when they match everywhere it matters. |
 | `affected_channel_ids` | string[] | The raw channel ids that matched more than one calibration. |
@@ -727,7 +822,8 @@ warning, or a gap where the channel was absent from a file.
     "channels_multiplexed": 0,
     "calibration_files_loaded": 1,
     "calibration_files_used": 1,
-    "calibration_files_averaged": 0
+    "calibration_files_averaged": 0,
+    "calibration_files_merged": 0
   },
   "tolerances": {
     "defaults":   { "transmit_power": 1.0, "...": "..." },
@@ -750,7 +846,8 @@ warning, or a gap where the channel was absent from a file.
       "calibration_date": ["2023-06-27"],
       "measured_at": { "transmit_power": 1000.0, "...": "..." },
       "source_filenames": ["CalibrationDataFile-D20230627-T181441-38kHz.xml"],
-      "is_averaged": false
+      "is_averaged": false,
+      "is_merged": false
     }
   }
 }
@@ -773,6 +870,7 @@ per frequency point.
     "CalibrationDataFile-D20230814-T160233-38kHz.xml"
   ],
   "is_averaged": true,
+  "is_merged": false,
   "gain_correction_spread_db": 0.16,
   "sa_correction_spread_db": 0.04,
   "averaged_from": [
@@ -780,6 +878,8 @@ per frequency point.
       "calibration_key": "2023-06-27__38000__config-1",
       "calibration_date": ["2023-06-27"],
       "source_filenames": ["CalibrationDataFile-D20230627-T181441-38kHz.xml"],
+      "sphere_diameter": 38.1,
+      "sphere_material": "tungsten carbide",
       "gain_correction": 26.92,
       "sa_correction": -0.07
     },
@@ -787,8 +887,60 @@ per frequency point.
       "calibration_key": "2023-08-14__38000__config-1",
       "calibration_date": ["2023-08-14"],
       "source_filenames": ["CalibrationDataFile-D20230814-T160233-38kHz.xml"],
+      "sphere_diameter": 38.1,
+      "sphere_material": "tungsten carbide",
       "gain_correction": 27.08,
       "sa_correction": -0.11
+    }
+  ]
+}
+```
+
+A calibration file this run merged says which calibration supplies each part
+of the band, in `coverage`, and which stretches none covers, in `holes_hz`.
+The two spreads are the largest difference between the calibrations where they
+overlap, which the merge never uses but a reviewer should weigh. `merged_from`
+lists the calibrations in priority order with their spheres. An item that was
+an average made in the same choice carries its own spreads and lists its
+sources under `average_of`.
+
+```json
+"2023-07-21+2023-07-20__200000__merge-67b552": {
+  "channel": "ES200-7C Serial No: 0",
+  "calibration_date": ["2023-07-21", "2023-07-20"],
+  "frequency_hz": [160000.0, 161001.0, "..."],
+  "measured_at": { "frequency_start": 160000.0, "frequency_end": 260000.0, "...": "..." },
+  "source_filenames": [
+    "CalibrationDataFile-D20230721-T000056-200fm-22mm.xml",
+    "CalibrationDataFile-D20230720-T184613_200FM_1ms_full.xml"
+  ],
+  "is_averaged": false,
+  "is_merged": true,
+  "gain_correction_spread_db": 0.83,
+  "sa_correction_spread_db": 0.0,
+  "coverage": [
+    { "band_hz": [160000.0, 163000.0], "source": "2023-07-20__200000__config-2" },
+    { "band_hz": [170010.0, 190000.0], "source": "2023-07-21__200000__config-1" },
+    { "band_hz": [190000.0, 205000.0], "source": "2023-07-20__200000__config-2" },
+    { "band_hz": [205000.0, 220000.0], "source": "2023-07-21__200000__config-1" },
+    { "band_hz": [220000.0, 240000.0], "source": "2023-07-20__200000__config-2" },
+    { "band_hz": [245000.0, 260000.0], "source": "2023-07-21__200000__config-1" }
+  ],
+  "holes_hz": [[163000.0, 170010.0], [240000.0, 245000.0]],
+  "merged_from": [
+    {
+      "calibration_key": "2023-07-21__200000__config-1",
+      "calibration_date": ["2023-07-21"],
+      "source_filenames": ["CalibrationDataFile-D20230721-T000056-200fm-22mm.xml"],
+      "sphere_diameter": 22.0,
+      "sphere_material": "tungsten carbide"
+    },
+    {
+      "calibration_key": "2023-07-20__200000__config-2",
+      "calibration_date": ["2023-07-20"],
+      "source_filenames": ["CalibrationDataFile-D20230720-T184613_200FM_1ms_full.xml"],
+      "sphere_diameter": 38.1,
+      "sphere_material": "tungsten carbide"
     }
   ]
 }
@@ -946,7 +1098,8 @@ FastAPI's own error bodies, and a 503 carries only `message`.
 | Service not configured | 503 | `CALIBRATION_CACHE_DIR` is not set, or `CALIBRATION_ARCHIVE_ROOT` for the archive call. The rest of the API is unaffected. |
 | Unknown conflict id | 400 | `ValueError: Unknown conflict id(s): ...`. Usually means `override_channels` changed between calls, so the ids no longer match. The message lists the valid ids. |
 | Choice not a candidate | 400 | `ValueError: '...' is not a candidate for conflict-...`. The key must be one of that conflict's `candidate_keys`. |
-| Malformed choice | 400 | `ValueError: The choice for conflict-... must be a calibration key, or a list of keys to average` or `... names a calibration more than once`. |
+| Malformed choice | 400 | `ValueError: The choice for conflict-... must be a calibration key, a list of keys to average, {'average': [keys]}, or {'merge': [keys]}`, `... nests merge inside merge`, or `... names a calibration more than once`. |
+| Candidates cannot be merged | 400 | `ValueError: conflict-...: Cannot merge these calibrations: <field> differs (...)`, `... merging is for FM calibrations with several frequency points, and ... are CW. Select one of them instead.`, or `Cannot merge ...: it is already a merge`. A merge that leaves part of the band uncovered is not an error; see `holes_hz` in the provenance. No choice in the request was applied. |
 | Candidates cannot be averaged | 400 | `ValueError: conflict-...: Cannot average these calibrations: <field> differs (<key>: <value>, ...)`, or `... the result is not a valid standardized record` when a source carries a value the schema rejects. Show it against the conflict it names; the user picks one candidate instead, or corrects the field during review if the records should agree. No choice in the request was applied. |
 | Invalid channel edit | 422 | `jsonschema.ValidationError`. An edited value failed the standardized schema; the message names the field and the expected type. Surface it on the field the user touched. |
 | No raw or calibration files found | 404 | `FileNotFoundError` from an empty or wrong input folder, or a time window that matches no raw file. |
@@ -983,9 +1136,11 @@ aa-recipe run save_calibration.yaml --input archive_dir=./archive
 Three differences from the service:
 
 - **Conflicts are answered at the terminal.** The recipe default is
-  `"interactive"`, which prompts. Enter one number to keep that file, or
-  several separated by commas, such as `1,2`, to average them; a combination
-  that cannot be averaged says why and asks again. `"error"` lists them and
+  `"interactive"`, which prompts. Enter one number to keep that file, several
+  separated by commas, such as `1,2`, to average them, or several separated by
+  `>`, such as `2>1`, to merge them with 2 used first; `(1,2)>3` averages 1
+  and 2 and merges the result over 3. A combination that cannot be made says
+  why and asks again. `"error"` lists them and
   stops so you can delete the unwanted single-channel file by hand. Do not pass
   `"report"` locally: it is the server's mode, and it returns a no-mapping
   result without saying anything a terminal user would notice.

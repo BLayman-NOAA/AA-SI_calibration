@@ -23,6 +23,7 @@ from aa_si_calibration import _storage
 from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
 from aa_si_calibration import manufacturer_file_parsers
 from aa_si_calibration import standardized_file_lib
+from aa_si_calibration.averaging import calibration_coverage
 from aa_si_calibration.mapping_algorithm import (
     DEFAULT_TOLERANCES,
     load_raw_configs,
@@ -307,19 +308,196 @@ def _stored_channel_data(stored, index, filename):
     return data
 
 
+def _beam_group(echodata, waveform_mode, encode_mode):
+    """The beam group echopype calibrates for these modes."""
+    from echopype.echodata.simrad import retrieve_correct_beam_group  # noqa: PLC0415
+
+    return retrieve_correct_beam_group(echodata, waveform_mode, encode_mode)
+
+
+def _unwrap(value):
+    """Unwrap single-element list/tuple to scalar."""
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return value[0]
+    return value
+
+
+def _is_frequency_dependent(cal_data):
+    """Whether a calibration record holds values at several frequency points."""
+    frequency = cal_data.get("frequency")
+    return isinstance(frequency, (list, tuple)) and len(frequency) > 1
+
+
+def _nominal_frequency(cal_data):
+    """The single frequency a channel is described by in other_params."""
+    if not _is_frequency_dependent(cal_data):
+        return _unwrap(cal_data.get("frequency"))
+    nominal = cal_data.get("nominal_transducer_frequency")
+    if nominal is not None:
+        return nominal
+    start, end = cal_data.get("frequency_start"), cal_data.get("frequency_end")
+    if start is not None and end is not None:
+        return (start + end) / 2
+    return None
+
+
+#: How echopype carries a broadband channel's nominal-frequency value to
+#: frequency f when it fills the value itself: value, nominal frequency and f
+#: in, value at f out. echopype uses a value it is given as is, so an FM record
+#: that holds only the nominal value is carried the same way here.
+_NOMINAL_SCALING = {
+    "equivalent_beam_angle": lambda value, nominal, f: value + 20 * np.log10(nominal / f),
+    "beamwidth_transmit_major": lambda value, nominal, f: value * nominal / f,
+    "beamwidth_transmit_minor": lambda value, nominal, f: value * nominal / f,
+    "echoangle_major_sensitivity": lambda value, nominal, f: value * f / nominal,
+    "echoangle_minor_sensitivity": lambda value, nominal, f: value * f / nominal,
+}
+
+
+def _per_frequency(cal_data, std_key):
+    """A parameter's values at each frequency point of an FM record.
+
+    A value the record holds per point is used as it is. A single value of a
+    field in _NOMINAL_SCALING is the value at the record's nominal transducer
+    frequency, and is carried to each point the way echopype carries its own.
+
+    Returns:
+        tuple | None: ``(frequencies, values)`` as float arrays, with null as
+        NaN, or None when the record is not FM or holds no usable value.
+    """
+    if not _is_frequency_dependent(cal_data):
+        return None
+    freq = np.array(cal_data["frequency"], dtype=float)
+    values = cal_data.get(std_key)
+    if isinstance(values, (list, tuple)) and len(values) == len(freq):
+        return freq, np.array([np.nan if v is None else v for v in values], dtype=float)
+    value = _unwrap(values)
+    nominal = cal_data.get("nominal_transducer_frequency")
+    scale = _NOMINAL_SCALING.get(std_key)
+    if scale is None or not isinstance(value, (int, float)) or not nominal:
+        return None
+    return freq, scale(float(value), float(nominal), freq)
+
+
+def _frequency_curves(channel_data_list, channel_ids, std_key):
+    """One calibration parameter as the frequency-dependent form echopype takes.
+
+    Args:
+        channel_data_list: One standardized record per channel.
+        channel_ids: The channels, in the same order.
+        std_key: The standardized field name.
+
+    Returns:
+        xr.DataArray | None: Dims ``(cal_channel_id, cal_frequency)`` over the
+        union of the FM channels' frequency points, or None when no channel has
+        this parameter per frequency. An FM channel's row is its values at its
+        own points (see :func:`_per_frequency`), interpolated onto the union
+        within the span of those points and NaN outside it. A channel with one
+        value is that value at every frequency.
+    """
+    curves = []
+    for cal_data in channel_data_list:
+        curve = _per_frequency(cal_data, std_key)
+        if curve is not None:
+            order = np.argsort(curve[0])
+            curve = (curve[0][order], curve[1][order])
+        curves.append(curve)
+    if all(curve is None for curve in curves):
+        return None
+
+    grid = np.unique(np.concatenate([c[0] for c in curves if c is not None]))
+    rows = []
+    for cal_data, curve in zip(channel_data_list, curves):
+        if curve is not None:
+            rows.append(np.interp(grid, curve[0], curve[1], left=np.nan, right=np.nan))
+            continue
+        value = _unwrap(cal_data.get(std_key))
+        constant = float(value) if isinstance(value, (int, float)) else np.nan
+        rows.append(np.full(grid.size, constant))
+    return xr.DataArray(
+        np.vstack(rows),
+        dims=("cal_channel_id", "cal_frequency"),
+        coords={"cal_channel_id": list(channel_ids), "cal_frequency": grid},
+    )
+
+
+def _centre_frequency(echodata, beam_group, channel_id, cal_data):
+    """A channel's transmit centre frequency, from the file or the record.
+
+    The file's transmit band at the first ping that has one, which is where
+    echopype evaluates the calibration; otherwise the middle of the
+    calibration's own band.
+    """
+    try:
+        beam = echodata[beam_group]
+        start = np.asarray(beam["transmit_frequency_start"].sel(channel=channel_id).values, float)
+        stop = np.asarray(beam["transmit_frequency_stop"].sel(channel=channel_id).values, float)
+        centre = ((start + stop) / 2).ravel()
+        centre = centre[np.isfinite(centre)]
+        if centre.size:
+            return float(centre[0])
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        pass
+    start, end = cal_data.get("frequency_start"), cal_data.get("frequency_end")
+    if start is None or end is None:
+        return None
+    return (start + end) / 2
+
+
+def _calibration_gap_warning(filename, channel_id, cal_key, cal_data, centre):
+    """The warning for a channel whose centre frequency its calibration misses.
+
+    Returns:
+        str | None: The warning, or None when the calibration covers the
+        centre frequency, or the centre is unknown.
+    """
+    if centre is None:
+        return None
+    coverage = calibration_coverage(cal_data)
+    if any(low <= centre <= high for low, high in coverage):
+        return None
+    below = [high for _, high in coverage if high < centre]
+    above = [low for low, _ in coverage if low > centre]
+    gap = (
+        f"between {max(below):.0f} and {min(above):.0f} Hz" if below and above
+        else f"outside its band of {coverage[0][0]:.0f}-{coverage[-1][1]:.0f} Hz"
+        if coverage else "anywhere"
+    )
+    return (
+        f"WARNING: {filename} channel {channel_id} is calibrated with {cal_key}, "
+        f"which has no calibration at the channel's centre frequency of "
+        f"{centre:.0f} Hz ({gap}). echopype interpolates across the gap, which "
+        f"may be a sphere's target strength null; outside the band it gives NaN."
+    )
+
+
 def extract_standardized_calibration_parameters(
     calibration_dict, mapping_dict, filename=None, echodata=None, raw_file_path=None,
-    unmapped_channels="warn", output_logs_folder=None,
+    unmapped_channels="warn", output_logs_folder=None, waveform_mode=None,
+    encode_mode=None,
 ):
     """Extract standardized calibration parameters in the comparison format.
 
     Reverses the per-channel standardized format stored in *calibration_dict*
     back into the ``(cal_params, env_params, other_params)`` structure used by
     :func:`comparison.run_full_calibration_comparison` and
-    :func:`print_calibration_values`.
+    :func:`print_calibration_values`, and accepted by
+    ``echopype.calibrate.compute_Sv``.
 
     This is the inverse of
     :func:`standardized_file_lib.convert_params_to_standardized_names`.
+
+    When any channel's calibration is frequency dependent (FM, with several
+    frequency points), each per-frequency parameter is returned as an
+    ``xr.DataArray`` with dims ``(cal_channel_id, cal_frequency)``, the form
+    echopype interpolates at each ping's centre frequency. A channel whose
+    centre frequency falls outside the bands its calibration covers is
+    reported on the terminal, since echopype then interpolates across a gap
+    that may be a sphere null. An FM record's single equivalent beam angle,
+    beam width or angle sensitivity is its value at the nominal transducer
+    frequency, and is carried across the band as echopype carries its own,
+    because echopype uses a supplied value as given. Parameters with one value
+    per channel and no FM channel stay lists.
 
     Args:
         calibration_dict: ``{cal_key: {standardized_param: value, …}, …}``
@@ -329,8 +507,8 @@ def extract_standardized_calibration_parameters(
         filename: Raw filename whose channels to extract.  If *None*, the
             first filename in *mapping_dict* is used.
         echodata: Optional EchoData object.  If provided, channel ordering
-            is taken from ``echodata["Sonar/Beam_group1"].channel.values``
-            to guarantee alignment with echopype arrays.
+            is taken from the beam group echopype will calibrate, to
+            guarantee alignment with echopype arrays.
         raw_file_path: Optional full or relative path to a raw file; its
             basename is used as *filename* when *filename* is not given
             directly. Convenience for callers (e.g. a per-file recipe step)
@@ -347,17 +525,42 @@ def extract_standardized_calibration_parameters(
             A temporary folder is used when omitted, which is usually what a
             per-file recipe step wants: several files reading the fallback at
             once would otherwise race on one flags file.
+        waveform_mode: The ``waveform_mode`` the Sv step passes to echopype,
+            ``"CW"`` or ``"BB"``. Selects the beam group whose channels are
+            extracted, which matters for an EK80 file that mixes CW and FM
+            channels: echopype calibrates one beam group at a time and needs
+            parameters for exactly its channels. When None, the first beam
+            group is used. Needs *echodata*.
+        encode_mode: The ``encode_mode`` the Sv step passes to echopype,
+            ``"complex"`` or ``"power"``. Given with *waveform_mode* or not
+            at all.
 
     Returns:
         dict with keys ``cal_params``, ``env_params``, ``other_params``.
         ``other_params["unmapped_channels"]`` names the channels that fell back
         to the file's own values, empty when the mapping covered every channel.
+
+    Raises:
+        ValueError: For an unknown *unmapped_channels* mode, a channel the
+            mapping does not cover when there is no fallback (``"error"``
+            mode, no *echodata*, a broadband extraction, whose stored values
+            are CW only, or a channel outside the first beam group, which is
+            the only one the stored values are read from), *waveform_mode*
+            or *encode_mode* given without the other, or *waveform_mode*
+            without *echodata*.
     """
     if unmapped_channels not in ("warn", "error"):
         raise ValueError(
             f"Unknown unmapped_channels mode: {unmapped_channels!r}. "
             "Use 'warn' or 'error'."
         )
+    if (waveform_mode is None) != (encode_mode is None):
+        raise ValueError(
+            "waveform_mode and encode_mode select a beam group together; give "
+            "both or neither."
+        )
+    if waveform_mode is not None and echodata is None:
+        raise ValueError("waveform_mode selects a beam group, so it needs echodata.")
     if filename is None and raw_file_path is not None:
         filename = Path(raw_file_path).name
     if filename is None:
@@ -366,10 +569,14 @@ def extract_standardized_calibration_parameters(
     file_channels = mapping_dict[filename]
 
     # Determine channel ordering
+    beam_group = "Sonar/Beam_group1"
+    if waveform_mode is not None:
+        beam_group = _beam_group(echodata, waveform_mode, encode_mode)
     if echodata is not None:
-        ordered_channel_ids = list(echodata["Sonar/Beam_group1"].channel.values)
+        ordered_channel_ids = list(echodata[beam_group].channel.values)
     else:
         ordered_channel_ids = list(file_channels.keys())
+    broadband = waveform_mode == "BB"
 
     # Collect per-channel standardized data, noting the channels the mapping
     # does not cover so they can fall back to the file's own values below.
@@ -378,10 +585,15 @@ def extract_standardized_calibration_parameters(
     for index, channel_id in enumerate(ordered_channel_ids):
         cal_key = file_channels.get(channel_id)
         if cal_key is None:
-            if unmapped_channels == "error" or echodata is None:
+            if unmapped_channels == "error" or echodata is None or broadband:
                 raise ValueError(
                     f"Channel '{channel_id}' not found in mapping for "
                     f"'{filename}'"
+                    + (
+                        ". A broadband channel cannot fall back to the values "
+                        "the raw file records, which are CW only."
+                        if broadband and unmapped_channels != "error" else ""
+                    )
                 )
             unmapped.append((index, channel_id))
             channel_data_list.append(None)
@@ -412,14 +624,19 @@ def extract_standardized_calibration_parameters(
             stored = extract_netcdf_calibration_parameters(
                 echodata, output_logs_folder
             )
-        for index, _ in unmapped:
-            channel_data_list[index] = _stored_channel_data(stored, index, filename)
-
-    def _unwrap(value):
-        """Unwrap single-element list/tuple to scalar."""
-        if isinstance(value, (list, tuple)) and len(value) == 1:
-            return value[0]
-        return value
+        # The stored values follow the first beam group's channel order.
+        stored_order = list(echodata["Sonar/Beam_group1"].channel.values)
+        for index, channel_id in unmapped:
+            if channel_id not in stored_order:
+                raise ValueError(
+                    f"Channel '{channel_id}' not found in mapping for "
+                    f"'{filename}', and it cannot fall back to the values the "
+                    f"raw file records, which are read from the first beam "
+                    f"group only."
+                )
+            channel_data_list[index] = _stored_channel_data(
+                stored, stored_order.index(channel_id), filename
+            )
 
     def _collect(std_key):
         """Collect a per-channel field into a list, unwrapping arrays."""
@@ -429,18 +646,32 @@ def extract_standardized_calibration_parameters(
         """Get a scalar field from the first channel."""
         return _unwrap(channel_data_list[0].get(std_key)) if channel_data_list else None
 
+    def _param(std_key):
+        """A calibration parameter: a frequency curve when any channel has one."""
+        curve = _frequency_curves(channel_data_list, ordered_channel_ids, std_key)
+        return _collect(std_key) if curve is None else curve
+
+    for channel_id, cal_data in zip(ordered_channel_ids, channel_data_list):
+        if _is_frequency_dependent(cal_data):
+            centre = _centre_frequency(echodata, beam_group, channel_id, cal_data)
+            warning = _calibration_gap_warning(
+                filename, channel_id, file_channels.get(channel_id), cal_data, centre
+            )
+            if warning:
+                _console.console_print(warning)
+
     # Reverse mapping from standardized names to comparison format names.
     # See convert_params_to_standardized_names for the forward direction.
     cal_params = {
-        "gain_correction": _collect("gain_correction"),
-        "sa_correction": _collect("sa_correction"),
-        "equivalent_beam_angle": _collect("equivalent_beam_angle"),
-        "beamwidth_athwartship": _collect("beamwidth_transmit_major"),
-        "beamwidth_alongship": _collect("beamwidth_transmit_minor"),
-        "angle_offset_athwartship": _collect("echoangle_major"),
-        "angle_offset_alongship": _collect("echoangle_minor"),
-        "angle_sensitivity_athwartship": _collect("echoangle_major_sensitivity"),
-        "angle_sensitivity_alongship": _collect("echoangle_minor_sensitivity"),
+        "gain_correction": _param("gain_correction"),
+        "sa_correction": _param("sa_correction"),
+        "equivalent_beam_angle": _param("equivalent_beam_angle"),
+        "beamwidth_athwartship": _param("beamwidth_transmit_major"),
+        "beamwidth_alongship": _param("beamwidth_transmit_minor"),
+        "angle_offset_athwartship": _param("echoangle_major"),
+        "angle_offset_alongship": _param("echoangle_minor"),
+        "angle_sensitivity_athwartship": _param("echoangle_major_sensitivity"),
+        "angle_sensitivity_alongship": _param("echoangle_minor_sensitivity"),
     }
 
     env_params = {
@@ -450,7 +681,7 @@ def extract_standardized_calibration_parameters(
 
     other_params = {
         "channel": ordered_channel_ids,
-        "frequency_nominal": _collect("frequency"),
+        "frequency_nominal": [_nominal_frequency(cd) for cd in channel_data_list],
         "transmit_duration_nominal": _collect("transmit_duration_nominal"),
         "transmit_power": _collect("transmit_power"),
         "transmit_bandwidth": _collect("transmit_bandwidth"),
@@ -558,6 +789,38 @@ def load_standardized_calibration_parameters(
     return result
 
 
+def _formatted(values, fmt):
+    """One display string per channel for a calibration parameter.
+
+    Args:
+        values: A per-channel list, with None for a missing value, or a
+            frequency-dependent ``xr.DataArray`` with dims
+            ``(cal_channel_id, cal_frequency)``.
+        fmt: Format spec for one value, such as ``".2f"``.
+
+    Returns:
+        list: Strings. A frequency curve is summarized by its point count,
+        its span, and its value in the middle of the span.
+    """
+    if not isinstance(values, xr.DataArray):
+        return ["null" if v is None else format(v, fmt) for v in values]
+    lines = []
+    for channel_id in values["cal_channel_id"].values:
+        row = values.sel(cal_channel_id=channel_id)
+        known = row.dropna("cal_frequency")
+        if not known.size:
+            lines.append("null")
+            continue
+        low = float(known["cal_frequency"].min())
+        high = float(known["cal_frequency"].max())
+        middle = float(known.interp(cal_frequency=(low + high) / 2))
+        lines.append(
+            f"{known.size} points, {low:.0f}-{high:.0f} Hz, "
+            f"{format(middle, fmt)} at {(low + high) / 2:.0f} Hz"
+        )
+    return lines
+
+
 def print_calibration_values(echodata, params, title="Calibration Values"):
     """Print formatted calibration parameters with appropriate units and formatting.
     
@@ -610,22 +873,22 @@ def print_calibration_values(echodata, params, title="Calibration Values"):
     transmit_power = [f"{tp:.1f}" for tp in transmit_power_num]
     transmit_power_units = echodata["Sonar/Beam_group1"]["transmit_power"][0][0].units
 
-    beamwidth_athwartship = [f"{b:.2f}" for b in beamwidth_athwartship_num]
+    beamwidth_athwartship = _formatted(beamwidth_athwartship_num, ".2f")
     beamwidth_athwartship_units = "deg"
 
-    beamwidth_alongship = [f"{b:.2f}" for b in beamwidth_alongship_num]
+    beamwidth_alongship = _formatted(beamwidth_alongship_num, ".2f")
     beamwidth_alongship_units = "deg"
 
-    angle_offset_athwartship = [f"{a:.2f}" for a in angle_offset_athwartship_num]
+    angle_offset_athwartship = _formatted(angle_offset_athwartship_num, ".2f")
     angle_offset_athwartship_units = "deg"
 
-    angle_offset_alongship = [f"{a:.2f}" for a in angle_offset_alongship_num]
+    angle_offset_alongship = _formatted(angle_offset_alongship_num, ".2f")
     angle_offset_alongship_units = "deg"
 
-    angle_sensitivity_athwartship = [f"{a:.2f}" for a in angle_sensitivity_athwartship_num]
+    angle_sensitivity_athwartship = _formatted(angle_sensitivity_athwartship_num, ".2f")
     angle_sensitivity_athwartship_units = "unitless"
 
-    angle_sensitivity_alongship = [f"{a:.2f}" for a in angle_sensitivity_alongship_num]
+    angle_sensitivity_alongship = _formatted(angle_sensitivity_alongship_num, ".2f")
     angle_sensitivity_alongship_units = "unitless"
 
     # Sound Speed
@@ -646,13 +909,13 @@ def print_calibration_values(echodata, params, title="Calibration Values"):
         transmit_duration_units = echodata["Sonar/Beam_group1"].transmit_duration_nominal.units
 
     gain_correction_units = echodata["Sonar/Beam_group1"].gain_correction.units
-    gain_correction = [f"{gc:.2f}" for gc in gain_correction_num]
+    gain_correction = _formatted(gain_correction_num, ".2f")
 
     sa_correction_units = "dB"
-    sa_correction = [f"{sa:.2f}" for sa in sa_correction_num]
+    sa_correction = _formatted(sa_correction_num, ".2f")
 
     # equivalent_beam_angle
-    equivalent_beam_angle = [f"{eba:.2f}" for eba in equivalent_beam_angle_num]
+    equivalent_beam_angle = _formatted(equivalent_beam_angle_num, ".2f")
 
     # ICES convention is tu use "sr" for units, but the values are stored in dB re 1 sr
     equivalent_beam_angle_units = "dB re sr"
@@ -1610,10 +1873,14 @@ def build_calibration_mapping(
             needs a terminal; ``"report"`` neither raises nor prompts, and
             instead returns the conflicts on the ``conflicts`` key without
             writing any mapping file.
-        calibration_choices: Optional ``{conflict_id: calibration key to keep}``
-            from a previous run's ``conflicts``, or a list of keys in place of
-            one key to average those candidates into a new single-channel
-            file. Applied in every mode before that mode's handler runs.
+        calibration_choices: Optional ``{conflict_id: choice}`` for conflicts
+            from a previous run's ``conflicts``. A choice is the calibration
+            key to keep; a list of keys, or ``{"average": [keys]}``, to average
+            those candidates; or ``{"merge": [items]}`` to merge them EK80
+            style in priority order, where an item is a key or an
+            ``{"average": [keys]}``. An average or merge is written as a new
+            single-channel file. Applied in every mode before that mode's
+            handler runs.
         keep_unused: If True, unused/rejected calibration files are moved to an
             ``unused_calibration_files`` subfolder instead of being deleted.
         tolerances: Per-field match tolerances, merged over
@@ -1629,10 +1896,10 @@ def build_calibration_mapping(
             both possibilities. Wire it to the same value the consuming
             extract_standardized_cal_params step uses.
         cruise_id: Recorded in the provenance report when known.
-        record_author: Recorded as the author of any averaged record.
+        record_author: Recorded as the author of any averaged or merged record.
         short_filenames: If True, remap the returned dictionaries to compact
             keys when they are not already the single-channel file names, and
-            give averaged records compact keys.
+            give averaged and merged records compact keys.
         verbose: If True, print progress information.
 
     Returns:
@@ -1713,17 +1980,19 @@ def build_calibration_mapping(
         return report, str(path)
 
     def _single_channel_data():
-        """The channels the mapping was built from, plus the averages it made.
+        """The channels the mapping was built from, plus the records it made.
 
-        The standardization step's payload has never seen an average, so a
-        mapping that names one has to return the record alongside it.
+        The standardization step's payload has never seen an average or a
+        merge, so a mapping that names one has to return the record alongside
+        it.
         """
         channels = {
             ch["_calibration_file_key"]: ch for ch in calibration_data["channels"]
         }
         channels.update({
             key: result.calibration_dict[key]
-            for key in result.averaged if key in result.calibration_dict
+            for key in [*result.averaged, *result.merged]
+            if key in result.calibration_dict
         })
         return standardized_file_lib.single_channel_payload(channels)
 

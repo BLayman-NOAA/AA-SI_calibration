@@ -77,6 +77,7 @@ def stub_pipeline(monkeypatch):
             "matched_channels": 1,
             "total_calibrations_loaded": 1,
             "averaged": {},
+            "merged": {},
             "print_summary": lambda self: None,
         },
     )()

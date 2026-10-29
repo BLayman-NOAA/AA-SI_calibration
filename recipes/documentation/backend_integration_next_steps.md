@@ -194,9 +194,11 @@ The flow the UI needs:
 1. Call standardize with the survey's raw and calibration folders. Show the
    returned channels for review and editing.
 2. Call mapping with the reviewed channels as `override_channels`.
-3. If `conflicts` is not empty, let the user pick one candidate or several to
-   average, and call mapping again with `calibration_choices`. Repeat until
-   `conflicts` is empty.
+3. If `conflicts` is not empty, let the user pick one candidate, several to
+   average, or several FM calibrations made with different spheres to merge in
+   an order they choose, and call mapping again with `calibration_choices`.
+   Repeat until `conflicts` is empty. For a merge, show the `holes_hz` its
+   provenance entry reports, the frequencies no chosen calibration covers.
 4. Show the `provenance` summary so the user can check the result.
 5. Call archive. Put the returned `archive_dir` into `calFileURI` on the
    submission form.

@@ -420,8 +420,9 @@ def convert_params_to_standardized_names(channels, cal_params, env_params, other
         ("other_params", "transducer_serial", False, False, "transducer_serial_number"),
         ("other_params", "transceiver_serial", False, False, "transceiver_serial_number"),
         ("other_params", "nominal_transducer_frequency", False, False, "nominal_transducer_frequency"),
+        ("other_params", "valid_frequency_bands", False, False, "valid_frequency_bands"),
     ]
-    
+
     param_sources = {
         "cal_params": cal_params,
         "env_params": env_params,
@@ -624,6 +625,7 @@ def assign_parameters_to_standardized_dictionary(
         for param_name, value in channel_param.items():
             if param_name in channel_entry:
                 channel_entry[param_name] = value
+        drop_unset_optional_fields(channel_entry)
         channel_entry["calibration_date"] = normalize_calibration_date(
             channel_entry["calibration_date"]
         )
@@ -662,6 +664,26 @@ def get_empty_top_level_params():
     return empty_channel_data  
 
 
+#: Fields a record carries only when they are set, with the value that counts
+#: as unset. CW and EK60 records never set them.
+OMITTED_WHEN_UNSET = {"is_merged": False, "valid_frequency_bands": None}
+
+
+def drop_unset_optional_fields(channel):
+    """Remove the fields in OMITTED_WHEN_UNSET that a channel leaves unset.
+
+    Args:
+        channel: A channel dictionary, changed in place.
+
+    Returns:
+        dict: The same dictionary.
+    """
+    for field, unset in OMITTED_WHEN_UNSET.items():
+        if field in channel and (channel[field] is None or channel[field] == unset):
+            del channel[field]
+    return channel
+
+
 def get_empty_channel_params():
     """Return a skeleton channel-level dictionary with all fields set to None."""
     empty_channel_data = {
@@ -691,6 +713,7 @@ def get_empty_channel_params():
         # Calibration metadata
         "calibration_date": None,
         "is_averaged": False,
+        "is_merged": False,
         "calibration_comments": None,
         "calibration_version": None,
         # Environmental parameters
@@ -719,6 +742,7 @@ def get_empty_channel_params():
         "gain_correction": None,
         "sa_correction": None,
         "frequency": None,
+        "valid_frequency_bands": None,
         "beamwidth_transmit_major": None,
         "beamwidth_receive_major": None,
         "beamwidth_transmit_minor": None,

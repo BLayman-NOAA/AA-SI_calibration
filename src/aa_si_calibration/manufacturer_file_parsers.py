@@ -478,6 +478,30 @@ def extract_calibration_params_from_EK60_report(cal_folder, nc_frequencies, outp
     return cal_data_refactored
 
 
+def parse_frequency_bands(text):
+    """Parse an EK80 ValidFrequencyBands value into [start, end] pairs.
+
+    Args:
+        text: Bands separated by ``;``, each as ``start,end`` in Hz, for example
+            ``"10000,86000;100000,110000"``.
+
+    Returns:
+        list | None: ``[[start, end], ...]`` as floats in the order written, or
+        None when no band can be read. Malformed bands are skipped.
+    """
+    bands = []
+    for band in text.split(';'):
+        parts = [p.strip() for p in band.split(',')]
+        if len(parts) != 2:
+            continue
+        try:
+            start, end = float(parts[0]), float(parts[1])
+        except ValueError:
+            continue
+        if end > start:
+            bands.append([start, end])
+    return bands or None
+
 
 def extract_calibration_params_from_EK80_xml(cal_folder, output_logs_folder=None):
     """Extract calibration parameters from EK80 XML calibration files.
@@ -686,7 +710,13 @@ def extract_calibration_params_from_EK80_xml(cal_folder, output_logs_folder=None
                 diameter_elem = target_ref.find('Diameter')
                 if diameter_elem is not None and diameter_elem.text:
                     cal_params['Sphere Diameter'] = float(diameter_elem.text)
-            
+
+                bands_elem = target_ref.find('ValidFrequencyBands')
+                if bands_elem is not None and bands_elem.text:
+                    bands = parse_frequency_bands(bands_elem.text)
+                    if bands:
+                        cal_params['Valid Frequency Bands'] = bands
+
             # === Extract CalibrationResults (frequency-dependent arrays for FM) ===
             cal_results = calibration.find('CalibrationResults')
             if cal_results is not None:
@@ -820,7 +850,7 @@ def _reformat_ek80_cal_data(cal_data_by_channel):
         print(f"\n   Channel: {channel_key}")
         for param, value in params.items():
             if isinstance(value, list):
-                if len(value) > 3:
+                if len(value) > 3 and isinstance(value[0], (int, float)):
                     print(f"      {param}: [{value[0]:.4g}, ..., {value[-1]:.4g}] ({len(value)} values)")
                 else:
                     print(f"      {param}: {value}")
@@ -901,6 +931,22 @@ def _log_ek80_missing_params(output_logs_folder, cal_data_by_channel, is_empty=F
                 print(f"Warning: {msg}")
     
     flags.save()
+
+
+def _fm_only(values, pulse_form_codes):
+    """Per-channel values kept only where the channel is FM (pulse form code 1).
+
+    Args:
+        values: Per-channel list, or None.
+        pulse_form_codes: Per-channel list of pulse form codes, or None.
+
+    Returns:
+        list | None: *values* with every non-FM entry replaced by None, or None
+        when either list is missing.
+    """
+    if values is None or pulse_form_codes is None:
+        return None
+    return [v if code == 1 else None for v, code in zip(values, pulse_form_codes)]
 
 
 def convert_ek80_params_to_pipeline_format(cal_data_refactored):
@@ -1049,8 +1095,12 @@ def convert_ek80_params_to_pipeline_format(cal_data_refactored):
         "sphere_name": cal_data_refactored.get("Sphere Name"),
         "nominal_transducer_frequency": nominal_transducer_frequency if nominal_transducer_frequency else None,
         "transceiver_type": cal_data_refactored.get("Transceiver Type"),
+        "valid_frequency_bands": _fm_only(
+            cal_data_refactored.get("Valid Frequency Bands"),
+            cal_data_refactored.get("Pulse Form Code"),
+        ),
     }
-    
+
     # Calculate transmit_bandwidth from frequency range for FM
     freq_starts = cal_data_refactored.get("Frequency Start")
     freq_ends = cal_data_refactored.get("Frequency End")
