@@ -678,6 +678,14 @@ def _calibration_file_entry(cal_key, cal_data, result):
     sources = result.merged.get(cal_key) or result.averaged.get(cal_key)
     if not sources:
         return entry
+    # An average made only to be merged has no entry of its own, so its
+    # warnings are listed with the merge it went into.
+    warnings = [
+        w for w in result.warnings
+        if w["calibration_key"] == cal_key or w["calibration_key"] in sources
+    ]
+    if warnings:
+        entry["warnings"] = warnings
     records = list(sources.values())
     # Spreads rather than every value: an FM record carries one gain per
     # frequency point, and the largest disagreement is what a reviewer weighs

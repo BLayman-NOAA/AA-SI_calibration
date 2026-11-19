@@ -24,6 +24,7 @@ from aa_si_calibration.raw_reader_api import process_raw_folder, save_yaml
 from aa_si_calibration import manufacturer_file_parsers
 from aa_si_calibration import standardized_file_lib
 from aa_si_calibration.averaging import calibration_coverage
+from aa_si_calibration.calibration_checks import print_warnings, sphere_warnings
 from aa_si_calibration.mapping_algorithm import (
     DEFAULT_TOLERANCES,
     load_raw_configs,
@@ -1514,6 +1515,31 @@ def _payload_from_dir(single_cal_output):
     )
 
 
+def _standardize_result(single_cal_output, channel_count, skipped, payload):
+    """The dict :func:`standardize_calibration_files` returns.
+
+    Args:
+        single_cal_output: Folder the single-channel files are in.
+        channel_count: Number of single-channel files in that folder.
+        skipped: True when the existing files were reused.
+        payload: ``{"channels": [...]}``, each channel carrying its
+            ``_calibration_file_key``.
+    """
+    warnings = [
+        warning
+        for channel in payload["channels"]
+        for warning in sphere_warnings(channel.get("_calibration_file_key"), channel)
+    ]
+    print_warnings(warnings)
+    return {
+        "single_channel_dir": str(single_cal_output),
+        "channel_count": channel_count,
+        "skipped": skipped,
+        "single_channel_data": payload,
+        "warnings": warnings,
+    }
+
+
 def _clear_single_channel_files(single_cal_output):
     """Delete the single-channel files so a rewrite cannot leave orphans behind.
 
@@ -1578,14 +1604,10 @@ def _write_override_channels(
             f"to: {single_cal_output}"
         )
 
-    return {
-        "single_channel_dir": str(single_cal_output),
-        "channel_count": saved_count,
-        "skipped": False,
-        "single_channel_data": standardized_file_lib.single_channel_payload(
-            channels_by_stem
-        ),
-    }
+    return _standardize_result(
+        single_cal_output, saved_count, False,
+        standardized_file_lib.single_channel_payload(channels_by_stem),
+    )
 
 
 def standardize_calibration_files(
@@ -1636,6 +1658,10 @@ def standardize_calibration_files(
             - single_channel_dir: Path to the single-channel output folder.
             - channel_count: Number of single-channel files now in that folder.
             - skipped: True when the existing files were reused.
+            - single_channel_data: ``{"channels": [...]}``, the standardized
+              channels, each carrying its ``_calibration_file_key``.
+            - warnings: Warnings about those channels, as
+              :func:`calibration_checks.sphere_warnings` builds them.
     """
     cal_input_remote = _storage.is_remote(cal_input_folder)
     if not cal_input_remote:
@@ -1671,12 +1697,10 @@ def standardize_calibration_files(
                 f"{single_cal_output}, skipping the parse."
             )
         _artifacts.record_artifact(single_cal_output)
-        return {
-            "single_channel_dir": str(single_cal_output),
-            "channel_count": len(existing_cal_files),
-            "skipped": True,
-            "single_channel_data": _payload_from_dir(single_cal_output),
-        }
+        return _standardize_result(
+            single_cal_output, len(existing_cal_files), True,
+            _payload_from_dir(single_cal_output),
+        )
 
     if override_channels is not None:
         return _write_override_channels(
@@ -1760,14 +1784,10 @@ def standardize_calibration_files(
     channels_by_stem = standardized_file_lib.assign_calibration_file_stems(
         channel_dicts, short_filenames=short_filenames
     )
-    return {
-        "single_channel_dir": str(single_cal_output),
-        "channel_count": saved_count,
-        "skipped": False,
-        "single_channel_data": standardized_file_lib.single_channel_payload(
-            channels_by_stem
-        ),
-    }
+    return _standardize_result(
+        single_cal_output, saved_count, False,
+        standardized_file_lib.single_channel_payload(channels_by_stem),
+    )
 
 
 #: What build_calibration_mapping does when a raw channel matches several
@@ -1878,7 +1898,8 @@ def build_calibration_mapping(
             key to keep; a list of keys, or ``{"average": [keys]}``, to average
             those candidates; or ``{"merge": [items]}`` to merge them EK80
             style in priority order, where an item is a key or an
-            ``{"average": [keys]}``. An average or merge is written as a new
+            ``{"average": [keys]}``. The sphere may differ between combined
+            candidates. An average or merge is written as a new
             single-channel file. Applied in every mode before that mode's
             handler runs.
         keep_unused: If True, unused/rejected calibration files are moved to an
@@ -1921,6 +1942,8 @@ def build_calibration_mapping(
               mapping was built from plus any averaged records, each carrying
               its ``_calibration_file_key``. Every key in mapping_dict names
               one of them.
+            - warnings: Warnings about the records averaged or merged, as
+              :func:`calibration_checks.combination_warnings` builds them.
     """
     if conflict_resolution not in _CONFLICT_MODES:
         raise ValueError(
@@ -2051,6 +2074,7 @@ def build_calibration_mapping(
                 "unused_file_names": [Path(f).name for f in moved_aside],
                 "conflicts": describe_conflicts(result),
                 "single_channel_data": _single_channel_data(),
+                "warnings": list(result.warnings),
             }
     else:
         check_for_conflicts(result, cal_files_dir=single_cal_output)
@@ -2105,6 +2129,7 @@ def build_calibration_mapping(
         "provenance": provenance,
         "provenance_path": provenance_path,
         "single_channel_data": _single_channel_data(),
+        "warnings": list(result.warnings),
     }
 
 
@@ -2315,6 +2340,8 @@ def generate_standardized_cal_mapping(
               referenced by the mapping (empty list means all used).
             - unused_file_names: The same files as plain names, which unlike
               Path objects survive a round trip through JSON.
+            - warnings: The standardization's warnings about the channels and
+              their spheres, then the mapping's about combined records.
     """
     # The input folders may be URLs and are coerced by the steps that read
     # them; outputs always stay local.
@@ -2339,7 +2366,7 @@ def generate_standardized_cal_mapping(
     )
 
     # Step 2: convert manufacturer files to standardized single-channel files.
-    standardize_calibration_files(
+    standardized = standardize_calibration_files(
         cal_input_folder,
         output_base,
         frequencies=frequencies_set,
@@ -2349,7 +2376,7 @@ def generate_standardized_cal_mapping(
     )
 
     # Steps 3 and 4: map, resolve conflicts, save, verify.
-    return build_calibration_mapping(
+    mapped = build_calibration_mapping(
         output_base,
         conflict_resolution=conflict_resolution,
         keep_unused=keep_unused,
@@ -2360,3 +2387,5 @@ def generate_standardized_cal_mapping(
         cruise_id=global_params["cruise_id"],
         record_author=global_params.get("record_author"),
     )
+    mapped["warnings"] = standardized["warnings"] + mapped["warnings"]
+    return mapped

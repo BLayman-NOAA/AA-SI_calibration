@@ -17,7 +17,12 @@ from typing import Dict, List, Optional, Tuple, Any
 from .constants import DEFAULT_TOLERANCES  # noqa: F401  (re-exported)
 from .standardized_file_lib import ensure_string_identifiers as _ensure_string_identifiers
 from . import _console
-from .averaging import average_calibration_records, merge_calibration_records, merge_coverage
+from .averaging import (
+    average_calibration_records,
+    calibration_coverage,
+    merge_calibration_records,
+)
+from .calibration_checks import combination_warnings, print_warnings, sphere_label
 
 from .standardized_file_lib import (
     build_calibration_key,
@@ -83,6 +88,8 @@ class MappingResult:
             -> {source key: source record}, in priority order. A source key
             may be that of an average made in the same choice, listed in
             ``averaged``.
+        warnings: Warnings about the records averaged or merged, each a dict
+            as :mod:`calibration_checks` builds them.
     """
     mapping_dict: Dict[str, Dict[str, str]] = field(default_factory=dict)
     calibration_dict: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -96,6 +103,7 @@ class MappingResult:
     multiplexing_warnings: List[MultiplexingWarning] = field(default_factory=list)
     averaged: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
     merged: Dict[str, Dict[str, Dict[str, Any]]] = field(default_factory=dict)
+    warnings: List[Dict[str, Any]] = field(default_factory=list)
 
     def print_summary(self):
         """Print a summary of the mapping results."""
@@ -1002,6 +1010,8 @@ CONFLICT_DETAIL_FIELDS = (
     "transmit_duration_nominal",
     "frequency_start",
     "frequency_end",
+    "sphere_diameter",
+    "sphere_material",
 )
 
 #: Fields left out of ``distinguishing_fields``. Each differs between any two
@@ -1116,6 +1126,7 @@ def describe_conflicts(result: MappingResult) -> dict:
             cal_data = result.calibration_dict.get(cal_key, {})
             entry = {"cal_key": cal_key}
             entry.update({f: cal_data.get(f) for f in CONFLICT_DETAIL_FIELDS})
+            entry["coverage_hz"] = calibration_coverage(cal_data)
             candidates.append(entry)
         described[conflict_id] = {
             "candidate_keys": candidate_keys,
@@ -1480,33 +1491,21 @@ def _apply_decisions(
     ]
 
     for key, (kind, _, _) in made.items():
-        if kind == "merge":
-            warning = merge_hole_warning(key, list(result.merged[key].values()))
-            if warning:
-                _console.console_print(warning)
+        listed = result.merged if kind == "merge" else result.averaged
+        found = combination_warnings(key, kind, listed[key])
+        print_warnings(found)
+        result.warnings.extend(found)
     return removable
 
 
-def merge_hole_warning(key, sources):
-    """The warning for a merged record that leaves part of its band uncovered.
-
-    Args:
-        key: The merged record's key.
-        sources: The records it was merged from, in priority order.
-
-    Returns:
-        str | None: The warning, or None when the sources cover the band.
-    """
-    holes = merge_coverage(sources)["holes_hz"]
-    if not holes:
-        return None
-    bands = " and ".join(f"{low:.0f}-{high:.0f} Hz" for low, high in holes)
-    return (
-        f"WARNING: {key} has no calibration in {bands}. None of the merged "
-        f"calibrations is valid there. At a ping whose centre frequency falls in "
-        f"a gap inside the band echopype interpolates across it, and at the "
-        f"edge of the band it gives NaN."
-    )
+def _candidate_details(cal_data) -> str:
+    """A candidate's sphere and the frequencies it covers, for a terminal user."""
+    sphere = sphere_label(cal_data)
+    covers = ", ".join(
+        f"{low / 1000:.1f}-{high / 1000:.1f}" if high > low else f"{low / 1000:.1f}"
+        for low, high in calibration_coverage(cal_data)
+    ) or "unknown"
+    return f"sphere: {sphere}  |  covers: {covers} kHz"
 
 
 def _render_conflict_block(
@@ -1537,6 +1536,7 @@ def _render_conflict_block(
         src_files = cal_data.get('source_filenames', ['unknown'])
         lines.append(f"  [{i}] {cal_key}.yaml")
         lines.append(f"      calibration_date: {cal_date}  |  source: {src_files}")
+        lines.append(f"      {_candidate_details(cal_data)}")
     return "\n".join(lines)
 
 
@@ -1691,6 +1691,7 @@ def print_conflict_report(
             src_files = cal_data.get('source_filenames', ['unknown'])
             print(f"  - {cal_key}.yaml")
             print(f"    calibration_date: {cal_date}  |  source: {src_files}")
+            print(f"    {_candidate_details(cal_data)}")
         print(f"\nAffected channel ID(s):")
         for cid in sorted({mm.channel_id for mm in channels}):
             print(f"  - {cid}")

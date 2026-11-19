@@ -626,7 +626,7 @@ def test_an_average_that_is_refused_changes_nothing(tmp_path, calibration_record
     for key in ("k1", "k2", "k3", "k4"):
         (cal_dir / f"{key}.yaml").write_text(f"channel: {key}")
     records = {
-        **_averageable(calibration_record, sphere_diameter=25.0),
+        **_averageable(calibration_record, transmit_power=1000.0),
         "k3": calibration_record("k3"),
         "k4": calibration_record("k4"),
     }
@@ -640,7 +640,7 @@ def test_an_average_that_is_refused_changes_nothing(tmp_path, calibration_record
     )
     choices = {conflict_group_id(["k3", "k4"]): "k4", _AVERAGE_CONFLICT: ["k1", "k2"]}
 
-    with pytest.raises(ValueError, match="sphere_diameter differs") as err:
+    with pytest.raises(ValueError, match="transmit_power differs") as err:
         apply_conflict_choices(
             result, choices, cal_files_dir=cal_dir, keep_unused=True, unused_dir=unused,
         )
@@ -680,13 +680,13 @@ def test_the_prompt_asks_again_when_files_cannot_be_averaged(
         return next(answers)
 
     monkeypatch.setattr(_console, "prompt", prompt)
-    result = _one_conflict(_averageable(calibration_record, sphere_diameter=25.0))
+    result = _one_conflict(_averageable(calibration_record, transmit_power=1000.0))
 
     resolve_conflicts_interactive(result, tmp_path)
 
     assert result.mapping_dict["a.raw"]["ch-1"] == "k2"
     assert result.averaged == {}
-    assert "sphere_diameter differs" in shown[1]
+    assert "transmit_power differs" in shown[1]
     assert "INVALID INPUT" in shown[2]
 
 
@@ -736,6 +736,7 @@ def test_the_report_branch_returns_single_channel_data(monkeypatch, tmp_path):
     out, _ = _mapping_step_result(monkeypatch, tmp_path, conflict_resolution="report")
 
     assert out["conflicts"]
+    assert out["warnings"] == []
     assert {c["_calibration_file_key"] for c in out["single_channel_data"]["channels"]} == {
         "k1", "k2",
     }
@@ -799,24 +800,23 @@ def test_the_prompt_computes_each_average_once(monkeypatch, tmp_path, calibratio
 _THREE_CONFLICT = conflict_group_id(["k1", "k2", "k3"])
 
 
-def _spheres(fm_calibration_record, post=False):
-    """k1 a large sphere, k2 a small one between its bands, k3 a repeat of k1.
+def _run(start, stop, step=500.0):
+    """Evenly spaced frequency points from start to stop, both included."""
+    return [start + i * step for i in range(int(round((stop - start) / step)) + 1)]
 
-    Merged, they leave 39.2-39.5 kHz uncovered.
+
+def _spheres(fm_calibration_record, post=False):
+    """k1 a large sphere, k2 a small one between its runs, k3 a repeat of k1.
+
+    k1 has points every 500 Hz over 30-32 and 40-45 kHz, and k2 every 1 kHz
+    over 31-37 kHz. Merged, they leave 37-40 kHz uncovered.
     """
-    large = dict(
-        frequency=[30000.0, 31000.0, 32000.0, 40000.0, 41000.0, 45000.0],
-        valid_frequency_bands=[[29000.0, 32500.0], [39500.0, 46000.0]],
-    )
+    large = _run(30000.0, 32000.0) + _run(40000.0, 45000.0)
+    small = _run(31000.0, 37000.0, 1000.0)
     records = {
-        "k1": fm_calibration_record(
-            "k1", gain=[20.0, 21.0, 22.0, 30.0, 31.0, 35.0], **large,
-        ),
+        "k1": fm_calibration_record("k1", large, [20.0 + i for i in range(len(large))]),
         "k2": fm_calibration_record(
-            "k2",
-            [31500.0, 33000.0, 36000.0, 39000.0, 41500.0],
-            [50.0, 51.0, 52.0, 53.0, 54.0],
-            valid_frequency_bands=[[31000.0, 39200.0], [41000.0, 42000.0]],
+            "k2", small, [50.0 + i for i in range(len(small))],
             calibration_date=["2023-07-21"],
             source_filenames=["small.xml"],
             sphere_diameter=22.0,
@@ -824,8 +824,8 @@ def _spheres(fm_calibration_record, post=False):
     }
     if post:
         records["k3"] = fm_calibration_record(
-            "k3", gain=[22.0, 23.0, 24.0, 32.0, 33.0, 37.0],
-            calibration_date=["2023-08-14"], source_filenames=["post.xml"], **large,
+            "k3", large, [22.0 + i for i in range(len(large))],
+            calibration_date=["2023-08-14"], source_filenames=["post.xml"],
         )
     return records
 
@@ -902,7 +902,69 @@ def test_a_merge_that_leaves_a_hole_warns(monkeypatch, fm_calibration_record):
     apply_conflict_choices(result, {_AVERAGE_CONFLICT: {"merge": ["k2", "k1"]}})
 
     assert result.multiple_matches == []
-    assert any("no calibration in 39200-39500 Hz" in line for line in printed)
+    assert any("no calibration in 37000-40000 Hz" in line for line in printed)
+    (merge_key,) = result.merged
+    (hole,) = [w for w in result.warnings if w["code"] == "merge_hole"]
+    assert hole["calibration_key"] == merge_key
+    assert hole["band_hz"] == [37000.0, 40000.0]
+    assert hole["severity"] == "caution"
+
+
+def test_an_average_of_different_spheres_is_applied_with_warnings(fm_calibration_record):
+    """The spheres differ by 28 dB where they overlap, far over the limit."""
+    result = _one_conflict(_spheres(fm_calibration_record))
+
+    apply_conflict_choices(result, {_AVERAGE_CONFLICT: ["k1", "k2"]})
+
+    (average_key,) = result.averaged
+    assert result.mapping_dict["a.raw"]["ch-1"] == average_key
+    assert result.calibration_dict[average_key]["sphere_diameter"] is None
+    warnings = {w["code"]: w for w in result.warnings}
+    assert set(warnings) == {"different_spheres", "overlap_difference"}
+    assert "38.1 mm tungsten carbide; 22 mm tungsten carbide" in (
+        warnings["different_spheres"]["message"]
+    )
+    assert warnings["overlap_difference"]["value"] == 28.0
+    assert all(w["calibration_key"] == average_key for w in result.warnings)
+    json.dumps(result.warnings)
+
+
+def test_calibrations_that_agree_combine_without_a_warning(calibration_record):
+    """A pre- and post-cruise pair with the same sphere, 0.3 dB apart."""
+    result = _one_conflict(_averageable(calibration_record, gain_correction=[25.3]))
+
+    apply_conflict_choices(result, {_AVERAGE_CONFLICT: ["k1", "k2"]})
+
+    assert result.warnings == []
+
+
+def test_the_prompt_shows_each_candidates_sphere_and_coverage(
+    monkeypatch, tmp_path, fm_calibration_record
+):
+    shown = []
+
+    def prompt(_text, context=None):
+        shown.append(context)
+        return "2"
+
+    monkeypatch.setattr(_console, "prompt", prompt)
+    result = _one_conflict(_spheres(fm_calibration_record))
+
+    resolve_conflicts_interactive(result, tmp_path)
+
+    assert "sphere: 38.1 mm tungsten carbide  |  covers: 30.0-32.0, 40.0-45.0 kHz" in shown[0]
+    assert "sphere: 22 mm tungsten carbide  |  covers: 31.0-37.0 kHz" in shown[0]
+
+
+def test_describe_conflicts_carries_sphere_and_coverage(fm_calibration_record):
+    result = _one_conflict(_spheres(fm_calibration_record))
+
+    (conflict,) = describe_conflicts(result).values()
+
+    large, small = conflict["candidates"]
+    assert large["sphere_diameter"] == 38.1 and small["sphere_diameter"] == 22.0
+    assert large["coverage_hz"] == [[30000.0, 32000.0], [40000.0, 45000.0]]
+    assert small["coverage_hz"] == [[31000.0, 37000.0]]
 
 
 def test_an_average_nested_in_a_merge_is_not_written(tmp_path, fm_calibration_record):
@@ -1028,14 +1090,23 @@ def test_the_mapping_step_completes_with_a_merge(monkeypatch, tmp_path, fm_calib
     assert summary["calibration_files_averaged"] == 0
     entry = out["provenance"]["calibration_files"][merge_key]
     assert entry["is_merged"] is True
-    assert entry["holes_hz"] == [[39200.0, 39500.0]]
-    # The average comes first, so k2 fills only the stretch between its bands.
+    assert entry["holes_hz"] == [[37000.0, 40000.0]]
+    # The average comes first, so k2 fills only the stretch between its runs.
     assert [(c["source"], c["band_hz"]) for c in entry["coverage"]] == [
-        (average_key, [30000.0, 32500.0]),
-        ("k2", [32500.0, 39200.0]),
-        (average_key, [39500.0, 45000.0]),
+        (average_key, [30000.0, 32000.0]),
+        ("k2", [32000.0, 37000.0]),
+        (average_key, [40000.0, 45000.0]),
     ]
     assert entry["gain_correction_spread_db"] is not None
+    # The nested average has no entry of its own, so its warnings are listed
+    # here with the merge's, and the step returns the same ones.
+    assert {(w["code"], w["calibration_key"]) for w in entry["warnings"]} == {
+        ("overlap_difference", average_key),
+        ("overlap_difference", merge_key),
+        ("merge_hole", merge_key),
+    }
+    assert out["warnings"] == entry["warnings"]
+    json.dumps(out["warnings"])
     nested, small = entry["merged_from"]
     assert nested["calibration_key"] == average_key
     assert [s["calibration_key"] for s in nested["average_of"]] == ["k1", "k3"]

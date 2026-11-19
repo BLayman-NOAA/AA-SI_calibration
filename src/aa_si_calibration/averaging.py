@@ -3,17 +3,17 @@
 When more than one calibration matches a raw channel, a user can choose to
 combine them instead of keeping one.
 
-An average is for repeat calibrations of the same transducer, at the same
-settings and with the same sphere, such as one before and one after a cruise.
+An average is for calibrations of the same transducer at the same settings,
+such as one before and one after a cruise, or one with each of two spheres.
 A merge is the EK80 software's way of combining calibrations made with
 different spheres: the calibrations are taken in the order given, the first is
-used wherever it is valid, and each later one fills only the frequencies the
+used wherever it has values, and each later one fills only the frequencies the
 earlier ones leave uncovered. Frequencies none of them covers stay uncovered.
 
-A calibration only has values where it is valid. For an FM record that is its
-``valid_frequency_bands``, within the span of its frequency points, so neither
-mode interpolates a calibration across the inhibited band around a sphere's
-target strength null.
+A calibration only has values where it was measured. For an FM record that is
+each run of its frequency points, a jump in their spacing being the inhibited
+band around a sphere's target strength null, so neither mode interpolates a
+calibration across one.
 """
 
 import datetime
@@ -34,9 +34,9 @@ from .standardized_file_lib import (
 )
 
 
-#: The settings a gain applies to, and the sphere it was measured with. Every
-#: averaged calibration must share them, and a null against a value is a
-#: difference: a gain measured at an unknown setting cannot be vouched for.
+#: The settings a gain applies to. Every combined calibration must share
+#: them, and a null against a value is a difference: a gain measured at an
+#: unknown setting cannot be vouched for.
 SETTING_FIELDS = (
     "channel",
     "pulse_form",
@@ -47,16 +47,19 @@ SETTING_FIELDS = (
     "transmit_duration_nominal",
     "sample_interval",
     "transmit_bandwidth",
-    "sphere_diameter",
-    "sphere_material",
 )
 
-#: The setting fields a merge lets differ: merging is how different spheres
-#: are combined.
+#: The sphere a calibration was measured with. It may differ between combined
+#: calibrations, and the new record carries the value they share.
 SPHERE_FIELDS = (
     "sphere_diameter",
     "sphere_material",
 )
+
+#: A step between frequency points this many times the usual one is a gap in
+#: the record. Steps inside a band of an EK80 calibration are within a tenth
+#: of the usual one, and the band left out around a sphere null is ten or more.
+GAP_FACTOR = 2.5
 
 #: What identifies the hardware and the file. Sources must not disagree, but a
 #: null is taken as not recorded, as the matcher treats a missing serial number,
@@ -143,8 +146,10 @@ def average_calibration_records(records, record_author=None):
     environment are averaged as they are. Every source counts equally, and a
     null in one source is skipped rather than counted. FM records are averaged
     over the union of their frequency points, each source interpolated onto it
-    only within the bands where it is valid, without extrapolating or bridging
-    its own nulls, following pyEchoLab's get_calibration_from_xml.
+    only within the bands it covers, without extrapolating or bridging its own
+    nulls, following pyEchoLab's get_calibration_from_xml. A frequency only
+    one source covers takes that source's value. The sphere may differ between
+    records; every other setting must match.
 
     Args:
         records: Two or more standardized channel dicts. A
@@ -168,7 +173,7 @@ def merge_calibration_records(records, record_author=None):
     """Merge FM calibration records of one channel, as the EK80 software does.
 
     The records are taken in the order given. At each frequency the first
-    record that is valid there supplies every per-frequency value, and the
+    record that covers it supplies every per-frequency value, and the
     later records fill only what the earlier ones leave uncovered. The merged
     record holds only measured points, never interpolated ones, and a value
     the supplying record leaves null at a point stays null. Values with
@@ -191,20 +196,45 @@ def merge_calibration_records(records, record_author=None):
 
     Raises:
         ValueError: If fewer than two records are given, one is itself a
-            merge, the records are CW, a field in MATCHED_FIELDS other than
-            the sphere differs, or the result is not a valid standardized
-            record.
+            merge, the records are CW, a field in MATCHED_FIELDS differs, or
+            the result is not a valid standardized record.
     """
     return _combine(records, merge=True, record_author=record_author)
+
+
+def measured_frequency_bands(frequency):
+    """Runs of frequency points with no gap between them.
+
+    A step more than GAP_FACTOR times the usual step ends a run, so one
+    missing point is bridged and anything wider is a gap.
+
+    Args:
+        frequency: Frequency points in Hz, in any order.
+
+    Returns:
+        list: Sorted ``[first, last]`` pairs in Hz, one per run. Empty when
+        there is no finite point.
+    """
+    freq = _points(frequency)
+    if freq.size < 2:
+        return [[float(f), float(f)] for f in freq]
+    steps = np.diff(freq)
+    breaks = np.flatnonzero(steps > GAP_FACTOR * _usual_step(freq))
+    starts = np.concatenate(([0], breaks + 1))
+    ends = np.concatenate((breaks, [freq.size - 1]))
+    return [[float(freq[s]), float(freq[e])] for s, e in zip(starts, ends)]
 
 
 def calibration_coverage(record):
     """Frequency intervals where a calibration record has values.
 
-    Each of the record's valid bands that holds at least one of its frequency
-    points, clipped to the span from its lowest to its highest point. A record
-    without valid bands covers that whole span. Within an interval the record
-    has values only between its own first and last point there.
+    For a record taken from one calibration, each run of its frequency points
+    (see :func:`measured_frequency_bands`). Its ``valid_frequency_bands`` are
+    not consulted, so the coverage is the same whether or not they were
+    recorded. An averaged or merged record sits on its sources' points, whose
+    spacing says nothing about gaps, so its coverage is the bands it was
+    written with, clipped to the span of its points, or that whole span when
+    it was written without them.
 
     Args:
         record: A standardized channel dict.
@@ -217,6 +247,8 @@ def calibration_coverage(record):
     freq = freq[np.isfinite(freq)]
     if not freq.size:
         return []
+    if not (record.get("is_averaged") or record.get("is_merged")):
+        return measured_frequency_bands(freq)
     low, high = float(freq.min()), float(freq.max())
     bands = record.get("valid_frequency_bands")
     if not bands:
@@ -241,7 +273,9 @@ def merge_coverage(records):
     Returns:
         dict: ``coverage``, a list of ``{"band_hz": [start, end], "source":
         name}`` sorted by frequency, and ``holes_hz``, the ``[start, end]``
-        intervals no record covers.
+        intervals no record covers. The step from one record's last point to
+        the next record's first is not a hole unless it is a gap by the
+        spacing of either record.
     """
     intervals = [calibration_coverage(r) for r in records]
     start = records[0].get("frequency_start")
@@ -261,7 +295,10 @@ def merge_coverage(records):
             )
             remaining = _subtract(remaining, interval)
     coverage.sort(key=lambda entry: entry["band_hz"][0])
-    return {"coverage": coverage, "holes_hz": remaining}
+    holes = [[float(start), float(end)]]
+    for interval in _joined_at_seams(intervals, records):
+        holes = _subtract(holes, interval)
+    return {"coverage": coverage, "holes_hz": holes}
 
 
 def value_spread(records, field):
@@ -314,9 +351,8 @@ def _combine(records, merge, record_author):
             )
     if not merge:
         sources.sort(key=lambda s: s["calibration_date"] or [])
-    matched = [f for f in MATCHED_FIELDS if not (merge and f in SPHERE_FIELDS)]
-    for field in matched:
-        _require_same(sources, field, null_differs=field in SETTING_FIELDS, merge=merge)
+    for field in MATCHED_FIELDS:
+        _require_same(sources, field, null_differs=field in SETTING_FIELDS, verb=verb)
 
     axes = _frequency_axes(sources, merge=merge)
     if axes[1] is None:
@@ -327,13 +363,13 @@ def _combine(records, merge, record_author):
                 f"with several frequency points, and {names} are CW. Select one "
                 f"of them instead."
             )
-        _require_same(sources, "frequency", null_differs=True, merge=merge)
+        _require_same(sources, "frequency", null_differs=True, verb=verb)
 
     schema = load_standardized_calibration_schema()
     precisions = extract_channel_precision_map(schema)
 
     record = get_empty_channel_params()
-    for field in matched:
+    for field in MATCHED_FIELDS:
         record[field] = next(
             (s[field] for s in sources if s.get(field) is not None), None
         )
@@ -354,15 +390,14 @@ def _combine(records, merge, record_author):
         record[field] = _combined(s.get(field) for s in sources)
     for field in TEXT_FIELDS:
         record[field] = _joined(s.get(field) for s in sources)
-    if merge:
-        diameters = _distinct(s.get("sphere_diameter") for s in sources)
-        record["sphere_diameter"] = diameters[0] if len(diameters) == 1 else None
-        record["sphere_material"] = _joined(s.get("sphere_material") for s in sources)
-    if grid is not None and any(s.get("valid_frequency_bands") for s in sources):
+    diameters = _distinct(s.get("sphere_diameter") for s in sources)
+    record["sphere_diameter"] = diameters[0] if len(diameters) == 1 else None
+    record["sphere_material"] = _joined(s.get("sphere_material") for s in sources)
+    if grid is not None:
         band_precision = precisions.get("valid_frequency_bands")
         record["valid_frequency_bands"] = [
             _rounded(interval, band_precision)
-            for interval in _union([i for c in axes[2] for i in c])
+            for interval in _joined_at_seams(axes[2], sources)
         ]
 
     authors = _distinct(s.get("record_author") for s in sources)
@@ -415,7 +450,7 @@ def _same(field, a, b):
     )
 
 
-def _require_same(sources, field, null_differs, merge=False):
+def _require_same(sources, field, null_differs, verb):
     """Raise unless every source has the same value for *field*.
 
     Args:
@@ -423,8 +458,7 @@ def _require_same(sources, field, null_differs, merge=False):
         field: The field to compare.
         null_differs: If True a null against a value is a difference. If False
             nulls are left out of the comparison.
-        merge: Whether the records are being merged rather than averaged,
-            which only changes the message.
+        verb: "average" or "merge", for the message.
     """
     values = [s.get(field) for s in sources]
     if not null_differs:
@@ -432,16 +466,10 @@ def _require_same(sources, field, null_differs, merge=False):
     if all(_same(field, values[0], v) for v in values[1:]):
         return
     values = ", ".join(f"{_label(s)}: {s.get(field)!r}" for s in sources)
-    if merge:
-        raise ValueError(
-            f"Cannot merge these calibrations: {field} differs ({values}). "
-            f"Only calibrations of the same transducer at the same settings are "
-            f"merged; the sphere may differ."
-        )
     raise ValueError(
-        f"Cannot average these calibrations: {field} differs ({values}). "
-        f"Only calibrations of the same transducer, at the same settings and "
-        f"with the same sphere, are averaged."
+        f"Cannot {verb} these calibrations: {field} differs ({values}). "
+        f"Only calibrations of the same transducer at the same settings are "
+        f"{verb}d; the sphere may differ."
     )
 
 
@@ -653,6 +681,59 @@ def _union(intervals):
         else:
             merged.append([low, high])
     return merged
+
+
+def _joined_at_seams(coverage, records):
+    """The records' coverage as one set of intervals, joined at seams.
+
+    A seam is the step between one record's interval and another record's.
+    It is joined when it is no gap by the spacing of either record, so it is
+    not taken for a hole. A gap within one record always stands.
+
+    Args:
+        coverage: Each record's :func:`calibration_coverage`.
+        records: The records, in the same order.
+
+    Returns:
+        list: Sorted, non-overlapping ``[start, end]`` pairs in Hz.
+    """
+    steps = [_usual_step(_points(r.get("frequency"))) for r in records]
+    tagged = sorted(
+        (low, high, index)
+        for index, intervals in enumerate(coverage)
+        for low, high in intervals
+    )
+    joined = []
+    for low, high, index in tagged:
+        if joined:
+            last_high, last_index = joined[-1][1], joined[-1][2]
+            seam = (
+                index != last_index
+                and low - last_high <= GAP_FACTOR * max(steps[index], steps[last_index])
+            )
+            if low <= last_high or seam:
+                if high > last_high:
+                    joined[-1][1:] = [high, index]
+                continue
+        joined.append([low, high, index])
+    return [[low, high] for low, high, _ in joined]
+
+
+def _points(frequency):
+    """Sorted unique finite frequency points as a float array."""
+    freq = _numbers(frequency)
+    return np.unique(freq[np.isfinite(freq)])
+
+
+def _usual_step(freq):
+    """The usual step between sorted frequency points, in Hz.
+
+    The lower median, so a record of only two steps is judged by the smaller
+    one rather than their mean. Zero for fewer than two points.
+    """
+    if freq.size < 2:
+        return 0.0
+    return float(np.percentile(np.diff(freq), 50, method="lower"))
 
 
 def _intersect(intervals, interval):

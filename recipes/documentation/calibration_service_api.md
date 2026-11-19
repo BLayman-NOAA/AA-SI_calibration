@@ -45,8 +45,9 @@ has to choose between them, or decide to combine them: two calibrations of the
 same transducer on the same day often differ only in a parameter such as
 transmit power, while a pre-cruise and a post-cruise calibration are often
 meant to be averaged, and calibrations made with two spheres are meant to be
-merged. That decision cannot be made before the run, and it cannot be made by
-the server.
+merged or averaged. That decision cannot be made before the run, and it cannot
+be made by the server. The server does flag what a person should weigh, on the
+`warnings` field of the first two calls; see [Warnings](#warnings).
 
 So the pipeline splits where the human belongs. Between call 1 and call 2 the
 user edits values, corrects dates, and discards channels. The edited set comes
@@ -178,6 +179,7 @@ for review.
 | --- | --- | --- |
 | `single_channel_data` | object | `{"channels": [...]}`, one entry per standardized channel. This is what the user reviews. See [Channel object](#channel-object). |
 | `single_channel_dir` | string | Where the files were written inside the container. Useful in logs; the client cannot read it. |
+| `warnings` | object[] | Warnings about the channels and their spheres: `sphere_size`, `near_null` and `coverage_gap`. Show each beside the channel its `calibration_key` names. See [Warnings](#warnings). |
 
 ```json
 {
@@ -219,6 +221,7 @@ Returned on both branches.
 | `single_channel_data` | object | The channel set the mapping was built from, carrying its final file keys, plus any record this call averaged or merged. Every key in `mapping_dict` names one of these. |
 | `provenance` | object | What calibration was applied over which stretch of the survey, and why, per channel. See [Provenance object](#provenance-object). |
 | `provenance_path` | string | Where the same report was written as YAML inside the container. Useful in logs; the client cannot read it, and does not need to, because `provenance` is the same content. |
+| `warnings` | object[] | Warnings about the records this call averaged or merged: `different_spheres`, `overlap_difference` and `merge_hole`. Empty when nothing was combined or nothing stood out. See [Warnings](#warnings). |
 
 ### When conflicts are outstanding
 
@@ -316,7 +319,7 @@ one of two ways. Nothing is combined unless the choice asks for it.
 | Choice | Effect |
 | --- | --- |
 | `"<key>"` | Keep that candidate. |
-| `["<key>", "<key>"]` or `{"average": ["<key>", "<key>"]}` | Average them. For repeat calibrations of the same transducer with the same sphere, such as one before and one after a cruise. See [Averaging](#averaging). |
+| `["<key>", "<key>"]` or `{"average": ["<key>", "<key>"]}` | Average them. For repeat calibrations of the same transducer, such as one before and one after a cruise, or calibrations made with two spheres. See [Averaging](#averaging). |
 | `{"merge": ["<key>", "<key>"]}` | Merge them in the order given, as the EK80 software merges calibrations made with different spheres. FM only. See [Merging](#merging). |
 | `{"merge": [{"average": ["<key>", "<key>"]}, "<key>"]}` | Average the first two, then merge the average over the third. |
 
@@ -367,43 +370,42 @@ counted. Each field is combined according to what it measures:
 
 | Rule | Fields |
 | --- | --- |
-| Must be the same in every source, or the request is refused | `channel`, the `transceiver_*` and `transducer_*` identifiers, `channel_instance_number`, `beam_type`, `multiplexing_found`, `pulse_form`, `frequency_start`, `frequency_end`, `nominal_transducer_frequency`, `transmit_power`, `transmit_duration_nominal`, `sample_interval`, `transmit_bandwidth`, `sphere_diameter`, `sphere_material`, `source_file_type`, and `frequency` for CW |
+| Must be the same in every source, or the request is refused | `channel`, the `transceiver_*` and `transducer_*` identifiers, `channel_instance_number`, `beam_type`, `multiplexing_found`, `pulse_form`, `frequency_start`, `frequency_end`, `nominal_transducer_frequency`, `transmit_power`, `transmit_duration_nominal`, `sample_interval`, `transmit_bandwidth`, `source_file_type`, and `frequency` for CW |
+| Kept when the sources share it, otherwise null (`sphere_diameter`) or joined with `; ` (`sphere_material`) | `sphere_diameter`, `sphere_material` |
 | Averaged as linear values (dB to linear, mean, back to dB) | `gain_correction`, `sa_correction`, `equivalent_beam_angle` |
 | Averaged as they are | the four `beamwidth_*` fields, `echoangle_major`, `echoangle_minor`, both `echoangle_*_sensitivity` fields, `absorption_indicative`, `sound_speed_indicative`, `temperature`, `salinity`, `acidity`, `pressure` |
 | Every source's entries, in date order | `calibration_date`, `source_filenames`, `source_file_paths` |
 | Kept when the sources agree, otherwise joined with `; ` | `calibration_comments`, `calibration_version`, `calibration_acquisition_method`, `source_file_location`, `sonar_software_version`, `sonar_software_name` |
-| Set new | `record_created` (now), `record_author` (the request's `record_author`), `is_averaged` (`true`), and for FM `valid_frequency_bands` (the union of the bands the sources cover) |
+| Set new | `record_created` (now), `record_author` (the request's `record_author`), `is_averaged` (`true`), and for FM `valid_frequency_bands` (the frequencies the sources cover between them) |
 
-The must-agree fields are the hardware, the settings a gain applies to, and the
-sphere it was measured with. A gain measured with any of them different is a
-measurement of something else. The frequency and power fields are compared
+The must-agree fields are the hardware and the settings a gain applies to. A
+gain measured with any of them different is a measurement of something else.
+The sphere may differ: averaging calibrations made with different spheres is
+published practice (Levine, Bassett and De Robertis 2025, ICES Journal of
+Marine Science 82). Spheres often disagree by a few tenths of a dB away from
+their nulls, so the response warns when they do; see [Warnings](#warnings). The frequency and power fields are compared
 within the matcher's default tolerances (1 Hz, 1 W, 1 µs), never a widened
 one. An averaged or merged record cannot itself be averaged, because its
 sources would be counted twice.
 
-A null is read two ways. For the settings and the sphere (`channel`,
-`pulse_form`, the frequency fields, `transmit_power`,
-`transmit_duration_nominal`, `sample_interval`, `transmit_bandwidth`,
-`sphere_diameter`, `sphere_material`) a null against a value is a difference,
-because a gain measured at an unknown setting cannot be vouched for. Correct
-it during review if the two records should agree. For the fields that
-identify the hardware and the file (the `transceiver_*` and `transducer_*`
-identifiers, `channel_instance_number`, `beam_type`, `multiplexing_found`,
-`source_file_type`) a null means not recorded, and the average takes the
-value the other sources give.
-
-The three RL2307 conflicts described under
-[Comparing candidates](#comparing-candidates), a 38.1 mm sphere calibration
-against a 25 mm one, are refused as averages. The error names the field and
-both values. Calibrations with different spheres are combined by merging
-instead.
+A null is read two ways. For the settings (`channel`, `pulse_form`, the
+frequency fields, `transmit_power`, `transmit_duration_nominal`,
+`sample_interval`, `transmit_bandwidth`) a null against a value is a
+difference, because a gain measured at an unknown setting cannot be vouched
+for. Correct it during review if the two records should agree. For the fields
+that identify the hardware and the file (the `transceiver_*` and
+`transducer_*` identifiers, `channel_instance_number`, `beam_type`,
+`multiplexing_found`, `source_file_type`) and for the sphere, a null means not
+recorded, and the average takes the value the other sources give.
 
 FM records are averaged over the union of their frequency points. A source has
-values only where it is valid: inside each of its `valid_frequency_bands`,
-between the first and last of its points there, or across all its points when
-the record has no bands. Each source is interpolated onto the union only
-within those stretches, never extrapolated and never carried across a gap, so
-a point only one calibration covers carries that calibration alone. A null at
+values in each run of its own points: a step between points more than 2.5
+times the usual one is a gap, such as the band the EK80 calibration leaves out
+around a sphere's target strength null. The source's `valid_frequency_bands`
+are not consulted, so the result is the same whether or not they were
+recorded. Each source is interpolated onto the union only within its runs,
+never extrapolated and never carried across a gap, so a point only one
+calibration covers carries that calibration alone. A null at
 one of a source's own points is treated the same way: that point and the
 stretches either side of it carry the other sources alone. This follows
 pyEchoLab's `get_calibration_from_xml`, except that pyEchoLab interpolates a
@@ -438,10 +440,10 @@ An averaged record, abridged:
 A merge combines FM calibrations of one channel made with different spheres,
 as the EK80 software does. Each sphere's target strength has nulls inside the
 band, and the EK80 calibration leaves no points in the band it inhibits around
-each null. Its file records where the sphere is valid in `ValidFrequencyBands`,
-which becomes the record's `valid_frequency_bands`.
+each null. Where a calibration has values is read from its points, as under
+[Averaging](#averaging).
 
-- **The order decides.** The first calibration is used wherever it is valid.
+- **The order decides.** The first calibration is used wherever it has values.
   Each later one fills only the frequencies the earlier ones leave uncovered.
   The EK80 software puts the most recent sphere first; here the order is the
   caller's, and the provenance records it.
@@ -452,19 +454,19 @@ which becomes the record's `valid_frequency_bands`.
   overlap. Values with one entry per record,
   such as `equivalent_beam_angle` and the environment, come from the first
   calibration that has them.
-- **The sphere may differ; nothing else may.** Every must-agree field of an
-  average must still agree, except `sphere_diameter` and `sphere_material`.
-  The merged record's `sphere_diameter` is null when the spheres differ, and
-  `sphere_material` is joined. Read each sphere from the provenance.
+- **The sphere may differ; nothing else may.** The same must-agree fields as
+  an average. The merged record's `sphere_diameter` is null when the spheres
+  differ, and `sphere_material` is joined. Read each sphere from the
+  provenance.
 - **FM only.** A CW calibration has one frequency point, so there is nothing
   to fill. CW candidates are refused; select one of them instead.
 - **Not twice.** A merged record cannot be merged again. Merge the
   calibrations it was made from instead.
 - **Holes warn, never fail.** A frequency between `frequency_start` and
-  `frequency_end` that no calibration covers stays uncovered. Coverage is
-  measured from each sphere's valid band edges, as the EK80 software measures
-  it, so the ordinary spacing between points is not a hole. The merge is
-  applied, the server logs a warning, and the provenance lists the gap under
+  `frequency_end` that no calibration covers stays uncovered. Holes run from
+  point to point, and the ordinary step from one calibration's last point to
+  the next one's first is not a hole. The merge is applied, the response
+  carries a `merge_hole` warning, and the provenance lists the gap under
   `holes_hz`. echopype calibrates a ping at its transmit centre frequency: if
   the centre falls in a hole inside the band it interpolates across it, and at
   the edge of the band it gives NaN. Check the holes against the channel's
@@ -472,13 +474,15 @@ which becomes the record's `valid_frequency_bands`.
 
 The merged record carries `is_merged: true`, and `is_averaged: true` as well
 when one of its items is an average. `calibration_date` and `source_filenames`
-list every source in merge order, and `valid_frequency_bands` is the union of
-what they cover.
+list every source in merge order, and `valid_frequency_bands` records what
+they cover between them. On a combined record that field is what says where it
+has values, because its points come from several calibrations and their
+spacing shows nothing.
 
 The example cruise's ES200 was calibrated with a 38.1 mm sphere on 2023-07-20
-and a 22 mm sphere on 2023-07-21. The 38.1 mm sphere is not valid from 205 to
-214 kHz, which holds the channel's 210 kHz centre frequency. Merging the
-22 mm calibration over it covers 210 kHz and leaves two holes:
+and a 22 mm sphere on 2023-07-21. The 38.1 mm calibration has no points from
+204 to 214 kHz, which holds the channel's 210 kHz centre frequency. Merging
+the 22 mm calibration over it covers 210 kHz and leaves two holes:
 
 ```json
 {
@@ -492,7 +496,7 @@ and a 22 mm sphere on 2023-07-21. The 38.1 mm sphere is not valid from 205 to
   "frequency_start": 160000.0,
   "frequency_end": 260000.0,
   "valid_frequency_bands": [
-    [160000.0, 163000.0], [170010.0, 240000.0], [245000.0, 260000.0]
+    [160000.0, 162002.0], [170010.0, 239079.0], [245085.0, 260000.0]
   ],
   "frequency": [160000.0, 161001.0, "...", 260000.0],
   "gain_correction": [22.07, 22.62, "...", 23.78]
@@ -676,7 +680,7 @@ required; every other field may be `null`. Abridged from a real generated file:
 | `calibration_date` | a list of strings | One date per calibration behind the record, so one for an ordinary record. A bare string from an older client is accepted and read as a one-item list. Dates in a recognized format are rewritten as YYYY-MM-DD. |
 | `is_averaged` | `true` only for an average | Set by the server when it averages candidates. A reviewed record should leave it `false`. |
 | `is_merged` | present only on a merge | Set by the server when it merges candidates. A reviewed record should not carry it. |
-| `valid_frequency_bands` | present only on FM records | The `[start, end]` bands, in Hz, where the calibration sphere is valid, read from the EK80 file. Leave it as parsed: a merge relies on it to know where each calibration has values. |
+| `valid_frequency_bands` | present only on FM records | The `[start, end]` bands, in Hz, the EK80 software treated as valid for the sphere, read from the EK80 file. Kept for reference: where a calibration has values is read from its frequency points, so editing or removing this changes nothing. |
 
 ## Conflict object
 
@@ -705,7 +709,10 @@ filename: date alone would show the user two identical-looking options.
         "transmit_power": 2000.0,
         "transmit_duration_nominal": 0.001024,
         "frequency_start": 38000.0,
-        "frequency_end": 38000.0
+        "frequency_end": 38000.0,
+        "sphere_diameter": 38.1,
+        "sphere_material": "tungsten carbide",
+        "coverage_hz": [[38000.0, 38000.0]]
       },
       {
         "cal_key": "2023-06-27__38000__config-2",
@@ -728,7 +735,7 @@ filename: date alone would show the user two identical-looking options.
 | Field | Type | Description |
 | --- | --- | --- |
 | `candidate_keys` | string[] | The calibration keys in contention. One of these is sent back as the choice, or several of them to average or merge. |
-| `candidates` | object[] | A summary of each candidate, enough to label it in a list. Not the full record; see [Comparing candidates](#comparing-candidates). |
+| `candidates` | object[] | A summary of each candidate, enough to label it in a list, including `sphere_diameter`, `sphere_material` and `coverage_hz`, the `[start, end]` stretches it has values in. Not the full record; see [Comparing candidates](#comparing-candidates). |
 | `distinguishing_fields` | string[] | Names of the fields whose values actually differ between the candidates. Empty when they match everywhere it matters. |
 | `affected_channel_ids` | string[] | The raw channel ids that matched more than one calibration. |
 | `affected_filenames` | string[] | Which raw files are held up by this conflict. |
@@ -742,8 +749,8 @@ machines, so the id a client receives is always the id it can send back.
 
 The `candidates` summaries are enough to label a list, but often not enough to
 choose from. In a real RL2307 run, three conflicts were each a 38.1 mm sphere
-calibration against a 25 mm sphere calibration of the same FM channel: every
-summary field was identical and only the source filename differed, while the
+calibration against a 25 mm sphere calibration of the same FM channel: the
+summaries differ only in the sphere and the frequencies each covers, while the
 gain corrections differed by nearly 3 dB.
 
 So the full comparison belongs to the client, which already has the records.
@@ -784,6 +791,44 @@ the stems and the call 1 keys no longer match.
 candidates really are identical everywhere that matters, or one candidate's
 record was not loaded. Fall back to showing the summaries and the source
 filenames rather than telling the user nothing differs.
+
+## Warnings
+
+The standardize and mapping calls return what a person should weigh as
+warnings. None of them refuses anything: the call succeeds, and the client
+decides how to present each one, for example asking for an acknowledgement on
+a `caution` but not on an `info`.
+
+```json
+{
+  "code": "overlap_difference",
+  "severity": "caution",
+  "calibration_key": "2023-06-27+2023-06-27__120000__average-3f1c2a",
+  "band_hz": null,
+  "value": 0.54,
+  "message": "The calibrations combined into ... differ by up to 0.54 dB in gain where they overlap, more than 0.5 dB. At least one of them is likely biased there."
+}
+```
+
+| Code | Call | Severity | When |
+| --- | --- | --- | --- |
+| `sphere_size` | standardize | caution | The sphere is large for some of the channel's frequencies: ka, the wavenumber times the sphere radius, is above 16.5, where target strength nulls are closely spaced and tungsten carbide spheres are least reliable (Lavery et al. 2017). `band_hz` is the range affected and `value` the largest ka. A 38.1 mm sphere at 333 kHz, ka about 27, gets one. Skipped when the sphere diameter or sound speed is not recorded. |
+| `near_null` | standardize | caution | One per run of the channel's frequencies close to a null in the sphere's theoretical target strength. An error of 0.5% in the sphere's diameter or sound speeds, or in the water sound speed, shifts that curve by about 0.5% of each frequency; a frequency is flagged when the shift changes the target strength by more than 0.25 dB, which passes into calibrated Sv and TS one for one. `band_hz` is the run and `value` the largest change in dB. Needs a tungsten carbide or copper sphere of known diameter. The EK80 software leaves the deepest part of each null out of an FM calibration, so in FM files this flags the points kept on a null's shoulders; it also fires for CW calibrations, such as a 38.1 mm sphere at 333 kHz or a 22 mm sphere at 200 kHz. |
+| `coverage_gap` | standardize | info | Part of an FM channel's band it has no values in, as `band_hz`. Usually the band left out around a sphere null. |
+| `different_spheres` | mapping | info | An average of calibrations made with different spheres. The message names them. |
+| `overlap_difference` | mapping | caution | The calibrations combined into an average or merge differ by more than 0.5 dB in gain where they overlap, the threshold ICES CRR 326 uses for re-evaluating a calibration. `value` is the difference. Spheres away from their nulls typically agree within a few tenths of a dB. |
+| `merge_hole` | mapping | caution | Part of a merge's band no calibration covers, as `band_hz`. |
+
+`calibration_key` names the standardized channel or combined record the
+warning is about, so a client can show it beside that channel or conflict
+candidate. A mapping warning is also listed on its calibration's entry in the
+[provenance](#provenance-object).
+
+`warnings` is an empty list when the call checked and found nothing, and
+`null` when the step was loaded from a survey cache written before warnings
+existed. A cached mapping from then also keeps the coverage rules of its time.
+After deploying this version, clear each survey's cache with
+[DELETE /calibration/cache](#delete-calibrationcache) to check it again.
 
 ## Provenance object
 
@@ -902,7 +947,8 @@ The two spreads are the largest difference between the calibrations where they
 overlap, which the merge never uses but a reviewer should weigh. `merged_from`
 lists the calibrations in priority order with their spheres. An item that was
 an average made in the same choice carries its own spreads and lists its
-sources under `average_of`.
+sources under `average_of`. `warnings` lists the [warnings](#warnings) about
+the file, and about an average made only to be merged into it.
 
 ```json
 "2023-07-21+2023-07-20__200000__merge-67b552": {
@@ -919,14 +965,19 @@ sources under `average_of`.
   "gain_correction_spread_db": 0.83,
   "sa_correction_spread_db": 0.0,
   "coverage": [
-    { "band_hz": [160000.0, 163000.0], "source": "2023-07-20__200000__config-2" },
-    { "band_hz": [170010.0, 190000.0], "source": "2023-07-21__200000__config-1" },
-    { "band_hz": [190000.0, 205000.0], "source": "2023-07-20__200000__config-2" },
-    { "band_hz": [205000.0, 220000.0], "source": "2023-07-21__200000__config-1" },
-    { "band_hz": [220000.0, 240000.0], "source": "2023-07-20__200000__config-2" },
-    { "band_hz": [245000.0, 260000.0], "source": "2023-07-21__200000__config-1" }
+    { "band_hz": [160000.0, 162002.0], "source": "2023-07-20__200000__config-2" },
+    { "band_hz": [170010.0, 189029.0], "source": "2023-07-21__200000__config-1" },
+    { "band_hz": [189029.0, 204044.0], "source": "2023-07-20__200000__config-2" },
+    { "band_hz": [205045.0, 219059.0], "source": "2023-07-21__200000__config-1" },
+    { "band_hz": [219059.0, 239079.0], "source": "2023-07-20__200000__config-2" },
+    { "band_hz": [245085.0, 260000.0], "source": "2023-07-21__200000__config-1" }
   ],
-  "holes_hz": [[163000.0, 170010.0], [240000.0, 245000.0]],
+  "holes_hz": [[162002.0, 170010.0], [239079.0, 245085.0]],
+  "warnings": [
+    { "code": "overlap_difference", "severity": "caution", "value": 0.83, "...": "..." },
+    { "code": "merge_hole", "severity": "caution", "band_hz": [162002.0, 170010.0], "...": "..." },
+    { "code": "merge_hole", "severity": "caution", "band_hz": [239079.0, 245085.0], "...": "..." }
+  ],
   "merged_from": [
     {
       "calibration_key": "2023-07-21__200000__config-1",
@@ -1099,7 +1150,7 @@ FastAPI's own error bodies, and a 503 carries only `message`.
 | Unknown conflict id | 400 | `ValueError: Unknown conflict id(s): ...`. Usually means `override_channels` changed between calls, so the ids no longer match. The message lists the valid ids. |
 | Choice not a candidate | 400 | `ValueError: '...' is not a candidate for conflict-...`. The key must be one of that conflict's `candidate_keys`. |
 | Malformed choice | 400 | `ValueError: The choice for conflict-... must be a calibration key, a list of keys to average, {'average': [keys]}, or {'merge': [keys]}`, `... nests merge inside merge`, or `... names a calibration more than once`. |
-| Candidates cannot be merged | 400 | `ValueError: conflict-...: Cannot merge these calibrations: <field> differs (...)`, `... merging is for FM calibrations with several frequency points, and ... are CW. Select one of them instead.`, or `Cannot merge ...: it is already a merge`. A merge that leaves part of the band uncovered is not an error; see `holes_hz` in the provenance. No choice in the request was applied. |
+| Candidates cannot be merged | 400 | `ValueError: conflict-...: Cannot merge these calibrations: <field> differs (...)`, `... merging is for FM calibrations with several frequency points, and ... are CW. Select one of them instead.`, or `Cannot merge ...: it is already a merge`. A merge that leaves part of the band uncovered is not an error; see the `merge_hole` warning. No choice in the request was applied. |
 | Candidates cannot be averaged | 400 | `ValueError: conflict-...: Cannot average these calibrations: <field> differs (<key>: <value>, ...)`, or `... the result is not a valid standardized record` when a source carries a value the schema rejects. Show it against the conflict it names; the user picks one candidate instead, or corrects the field during review if the records should agree. No choice in the request was applied. |
 | Invalid channel edit | 422 | `jsonschema.ValidationError`. An edited value failed the standardized schema; the message names the field and the expected type. Surface it on the field the user touched. |
 | No raw or calibration files found | 404 | `FileNotFoundError` from an empty or wrong input folder, or a time window that matches no raw file. |

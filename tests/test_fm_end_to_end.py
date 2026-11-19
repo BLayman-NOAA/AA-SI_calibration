@@ -101,9 +101,13 @@ def test_a_merged_calibration_calibrates_broadband_data(survey, printed):
     assert printed == []
 
     (merged,) = [k for k, e in done["provenance"]["calibration_files"].items() if e["is_merged"]]
-    assert done["provenance"]["calibration_files"][merged]["holes_hz"] == [
-        [163000.0, 170010.0], [240000.0, 245000.0],
+    entry = done["provenance"]["calibration_files"][merged]
+    assert entry["holes_hz"] == [[162002.0, 170010.0], [239079.0, 245085.0]]
+    # The spheres differ by 0.83 dB where they overlap, and two holes remain.
+    assert [w["code"] for w in done["warnings"]] == [
+        "overlap_difference", "merge_hole", "merge_hole",
     ]
+    assert entry["warnings"] == done["warnings"]
 
 
 @pytest.mark.slow
@@ -111,6 +115,6 @@ def test_the_large_sphere_alone_misses_the_centre_frequency(survey, printed):
     _calibrate(survey, LARGE_200, printed)
 
     assert any(
-        LARGE_200 in line and "210000 Hz" in line and "between 205000 and 214000 Hz" in line
+        LARGE_200 in line and "210000 Hz" in line and "between 204044 and 214054 Hz" in line
         for line in printed
     )

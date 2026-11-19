@@ -61,8 +61,20 @@ from .mapping_algorithm import (
 from .averaging import (
     average_calibration_records,
     calibration_coverage,
+    measured_frequency_bands,
     merge_calibration_records,
     merge_coverage,
+)
+
+from .calibration_checks import (
+    combination_warnings,
+    sphere_warnings,
+)
+
+from .sphere_model import (
+    SPHERE_MATERIALS,
+    sphere_ka,
+    sphere_target_strength,
 )
 
 from .provenance import (
@@ -152,6 +164,12 @@ __all__ = [
     'merge_calibration_records',
     'merge_coverage',
     'calibration_coverage',
+    'measured_frequency_bands',
+    'combination_warnings',
+    'sphere_warnings',
+    'SPHERE_MATERIALS',
+    'sphere_ka',
+    'sphere_target_strength',
     'print_conflict_report',
     'check_required_calibration_params',
     'verify_calibration_file_usage',

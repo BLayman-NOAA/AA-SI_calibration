@@ -10,6 +10,7 @@ from aa_si_calibration.averaging import (
     GENERATED_FIELDS,
     LINEAR_FIELDS,
     MATCHED_FIELDS,
+    SPHERE_FIELDS,
     TEXT_FIELDS,
     average_calibration_records,
     value_spread,
@@ -41,7 +42,7 @@ def test_every_schema_field_has_a_rule():
     """A field added to the schema must be given a rule, not silently dropped."""
     named = [
         f for group in (
-            MATCHED_FIELDS, DECIBEL_FIELDS, LINEAR_FIELDS,
+            MATCHED_FIELDS, SPHERE_FIELDS, DECIBEL_FIELDS, LINEAR_FIELDS,
             COMBINED_LIST_FIELDS, TEXT_FIELDS, GENERATED_FIELDS,
         )
         for f in group
@@ -131,8 +132,6 @@ def test_text_that_differs_is_joined(pre_and_post):
 @pytest.mark.parametrize("field, value", [
     ("transmit_power", 1000.0),
     ("transmit_duration_nominal", 0.000512),
-    ("sphere_diameter", 25.0),
-    ("sphere_material", "copper"),
     ("transducer_serial_number", "338"),
     ("pulse_form", "1"),
     ("channel", "ES38-7 Serial No: 338"),
@@ -238,9 +237,33 @@ def test_an_unrecorded_identity_field_takes_the_other_sources_value(calibration_
     assert record["multiplexing_found"] is False
 
 
-@pytest.mark.parametrize("field", ["sphere_diameter", "transmit_power", "sample_interval"])
+def test_calibrations_made_with_different_spheres_are_averaged(calibration_record):
+    """The average carries the sphere only when its sources share one."""
+    record = average_calibration_records([
+        calibration_record("k1"),
+        calibration_record(
+            "k2", sphere_diameter=25.0, gain_correction=[27.0],
+            calibration_date=["2023-08-14"],
+        ),
+    ])
+
+    assert record["gain_correction"] == [26.11]
+    assert record["sphere_diameter"] is None
+    assert record["sphere_material"] == "tungsten carbide"
+
+
+def test_an_unrecorded_sphere_takes_the_other_sources_value(calibration_record):
+    record = average_calibration_records([
+        calibration_record("k1", sphere_diameter=None),
+        calibration_record("k2", calibration_date=["2023-08-14"]),
+    ])
+
+    assert record["sphere_diameter"] == 38.1
+
+
+@pytest.mark.parametrize("field", ["transmit_power", "sample_interval"])
 def test_an_unrecorded_setting_is_a_difference(calibration_record, field):
-    """A gain measured at an unknown setting or sphere cannot be vouched for."""
+    """A gain measured at an unknown setting cannot be vouched for."""
     with pytest.raises(ValueError, match=f"{field} differs"):
         average_calibration_records([
             calibration_record("k1"),

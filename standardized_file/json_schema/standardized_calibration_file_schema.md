@@ -1159,7 +1159,7 @@ Units: Hz
 | **Type**     | `array of array or null` |
 | **Required** | No                       |
 
-**Description:** Frequency bands, as [start, end] pairs, where the calibration sphere's target strength is usable. Read from ValidFrequencyBands in an EK80 calibration file. The gaps between bands are the bands inhibited around the sphere's target strength nulls, and the EK80 software leaves no calibration points in them. Present only on frequency-dependent (FM) records; absent on CW and EK60 records. On an averaged or merged record it is the union of the bands the contributing calibrations cover.
+**Description:** Frequency bands, as [start, end] pairs, where the calibration sphere's target strength is usable. Read from ValidFrequencyBands in an EK80 calibration file. The gaps between bands are the bands inhibited around the sphere's target strength nulls, and the EK80 software leaves no calibration points in them. Present only on frequency-dependent (FM) records; absent on CW and EK60 records. On a record taken from one calibration it is kept for reference only: the frequencies the record covers are worked out from the spacing of its points, so they do not depend on this field. On an averaged or merged record it is written from the frequencies the contributing calibrations cover, and is what says where that record has values.
 
 Precision: 10
 

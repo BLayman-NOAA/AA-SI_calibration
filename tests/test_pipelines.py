@@ -69,6 +69,7 @@ class _DummyMappingResult:
         self.total_calibrations_loaded = 1
         self.averaged = {}
         self.merged = {}
+        self.warnings = []
 
     def print_summary(self):
         return None
@@ -298,6 +299,7 @@ def test_generate_standardized_cal_mapping_accepts_explicit_metadata(tmp_path, m
     }
     assert result["mapping_dict"] == dummy_result.mapping_dict
     assert result["calibration_dict"] == dummy_result.calibration_dict
+    assert result["warnings"] == []
 
 
 def test_generate_standardized_cal_mapping_accepts_global_params_fallback(tmp_path, monkeypatch):

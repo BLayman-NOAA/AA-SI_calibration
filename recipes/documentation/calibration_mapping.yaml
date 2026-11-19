@@ -115,8 +115,8 @@ inputs:
       Conflict decisions from a previous "report" run, mapping a conflict id to
       the calibration key to keep, to a list of candidate keys to average, or
       to {"merge": [keys]} to merge them as the EK80 software does, the first
-      key used wherever its sphere is valid and the later ones filling the
-      rest. A merge item may itself be {"average": [keys]}. An average or
+      key used wherever it has values and the later ones filling the rest.
+      The sphere may differ in an average as well as a merge. A merge item may itself be {"average": [keys]}. An average or
       merge becomes a new single-channel file. Applied before the chosen mode
       runs, so a partial map resolves what it covers and the rest is reported
       again.

@@ -55,10 +55,11 @@ def records(calibration_record, fm_calibration_record):
         frequency_start=34000.0, frequency_end=45000.0,
         beamwidth_transmit_major=[7.5, 7.0, 6.5],
     )
+    # Points every 5 kHz over 160-200 and 215-260 kHz, so 210 kHz is in a gap.
+    frequency_200 = [160000.0 + 5000.0 * i for i in range(21) if i not in (9, 10)]
     fm_200 = fm_calibration_record(
-        "fm-200", [160000.0, 200000.0, 215000.0, 260000.0], [26.0, 27.0, 27.5, 28.0],
+        "fm-200", frequency_200, [26.0 + 0.1 * i for i in range(len(frequency_200))],
         frequency_start=160000.0, frequency_end=260000.0, nominal_transducer_frequency=200000.0,
-        valid_frequency_bands=[[150000.0, 205000.0], [214000.0, 261000.0]],
     )
     cw_18 = calibration_record(
         "cw-18", gain_correction=[22.0], frequency=[18000.0], equivalent_beam_angle=-17.0,
@@ -187,7 +188,7 @@ def test_a_centre_frequency_in_a_calibration_gap_is_reported(records, printed):
 
     (warning,) = printed
     assert "fm-200" in warning and "210000 Hz" in warning
-    assert "between 205000 and 214000 Hz" in warning
+    assert "between 200000 and 215000 Hz" in warning
 
 
 def test_a_covered_centre_frequency_is_not_reported(records, printed):

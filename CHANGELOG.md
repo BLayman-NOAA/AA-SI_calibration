@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed: averaging across spheres, coverage from measured points, warnings as data
+- An average may combine calibrations made with different spheres, as a merge
+  already could. `sphere_diameter` and `sphere_material` left the fields every
+  source must share; the average keeps the diameter when the sources share it
+  and joins the materials.
+- Where a calibration record has values is read from its own frequency points:
+  a step more than 2.5 times the usual one is a gap (`measured_frequency_bands`).
+  A record's `valid_frequency_bands` no longer decides it, so a record without
+  them no longer counts as covering the gaps around its sphere's nulls, which
+  an average used to interpolate across. An averaged or merged record still
+  stores the bands it covers and is read from them. Merge holes now run point
+  to point, slightly wider than the EK80 band edges.
+- New `calibration_checks` module. `standardize_calibration_files` returns
+  `warnings`: `sphere_size` (ka above 16.5) and `coverage_gap`.
+  `build_calibration_mapping` returns `warnings`: `different_spheres`,
+  `overlap_difference` (above 0.5 dB) and `merge_hole`, and lists them on the
+  calibration's provenance entry. Each warning is a JSON-safe dict with
+  `code`, `severity`, `calibration_key`, `band_hz`, `value` and `message`.
+  Cautions are printed to the terminal and notes to the run log.
+- New `sphere_model` module: the theoretical target strength of a tungsten
+  carbide or copper calibration sphere (MacLennan 1981), checked against ICES
+  CRR 326 and the curves the EK80 software stores. Standardizing uses it for a
+  `near_null` warning wherever an error of 0.5% in the sphere's size or sound
+  speeds changes its target strength by more than 0.25 dB. Adds `scipy` to the
+  dependencies.
+- The conflict prompt, the conflict report and `describe_conflicts` show each
+  candidate's sphere and the frequencies it covers (`coverage_hz`).
+- `merge_hole_warning` was removed; its message is the `merge_hole` warning.
+
 ### Added
 - The pipeline is callable as separate steps: `read_raw_file_config` (one raw
   file), `record_raw_file_configs` (sort and save the survey's configurations),
