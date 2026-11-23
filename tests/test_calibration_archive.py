@@ -278,15 +278,41 @@ def test_an_archive_dir_that_is_a_file_is_refused(tmp_path, supplied):
         archive.save_calibration_archive(destination, **supplied)
 
 
-def test_a_non_empty_destination_is_refused(tmp_path, supplied):
+def test_a_destination_holding_an_archive_is_refused(tmp_path, supplied):
     destination = tmp_path / "archive"
     destination.mkdir()
     (destination / "channel_mapping.yaml").write_text("old: archive\n")
 
-    with pytest.raises(ValueError, match="not empty"):
+    with pytest.raises(ValueError, match="already holds a calibration archive"):
         archive.save_calibration_archive(destination, **supplied)
 
     assert (destination / "channel_mapping.yaml").read_text() == "old: archive\n"
+
+
+def test_earlier_channel_files_alone_count_as_an_archive(tmp_path, supplied):
+    destination = tmp_path / "archive"
+    reports = destination / archive.REPORTS_DIRNAME
+    reports.mkdir(parents=True)
+    (reports / "old-channel.yaml").write_text("old: channel\n")
+
+    with pytest.raises(ValueError, match="already holds a calibration archive"):
+        archive.save_calibration_archive(destination, **supplied)
+
+
+def test_other_files_in_the_destination_do_not_block_or_get_removed(
+    tmp_path, supplied
+):
+    """A survey keeps its manufacturer reports beside the archive."""
+    destination = tmp_path / "Calibration"
+    manufacturer = destination / "Manufacturer_Reports" / "38kHz.xml"
+    manufacturer.parent.mkdir(parents=True)
+    manufacturer.write_text("<cal/>")
+
+    archive.save_calibration_archive(destination, **supplied)
+    archive.save_calibration_archive(destination, **supplied, overwrite=True)
+
+    assert manufacturer.read_text() == "<cal/>"
+    assert (destination / "channel_mapping.yaml").exists()
 
 
 def test_overwrite_replaces_the_archive_and_leaves_no_orphan_channel_file(
@@ -400,11 +426,23 @@ def test_the_archive_can_be_written_to_a_remote_destination(supplied):
     assert mapping == supplied["mapping_dict"]
 
 
-def test_a_non_empty_remote_destination_is_refused(supplied):
+def test_a_remote_destination_holding_an_archive_is_refused(supplied):
     destination = "memory://surveys/RL2307/calibration"
     fsspec.filesystem("memory").pipe_file(
         "/surveys/RL2307/calibration/channel_mapping.yaml", b"old: archive\n"
     )
 
-    with pytest.raises(ValueError, match="not empty"):
+    with pytest.raises(ValueError, match="already holds a calibration archive"):
         archive.save_calibration_archive(destination, **supplied)
+
+
+def test_other_files_in_a_remote_destination_do_not_block(supplied):
+    destination = "memory://surveys/RL2307/Calibration"
+    report = "/surveys/RL2307/Calibration/Manufacturer_Reports/38kHz.xml"
+    fs = fsspec.filesystem("memory")
+    fs.pipe_file(report, b"<cal/>")
+
+    archive.save_calibration_archive(destination, **supplied)
+
+    assert fs.cat_file(report) == b"<cal/>"
+    assert fs.exists("/surveys/RL2307/Calibration/channel_mapping.yaml")

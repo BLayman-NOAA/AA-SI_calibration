@@ -213,22 +213,35 @@ def _check_mapping_is_covered(keys, mapping_dict):
         )
 
 
+def _holds_an_archive(archive_dir, reports_dir, options):
+    """True when *archive_dir* already holds a file an archive writes.
+
+    Only the archive's own files count. The directory may hold other things,
+    such as the manufacturer reports a survey keeps beside its calibration.
+    """
+    top_level = (MAPPING_FILENAME, PROVENANCE_FILENAME)
+    return any(
+        _storage.exists(_storage.join(archive_dir, name), options)
+        for name in top_level
+    ) or not _storage.is_empty_dir(reports_dir, options)
+
+
 def _check_destination(archive_dir, reports_dir, overwrite, options):
-    """Refuse a non-empty destination, or clear what overwrite replaces."""
+    """Refuse to replace an earlier archive, or clear what overwrite replaces."""
     if not _storage.is_remote(archive_dir) and Path(archive_dir).is_file():
         raise ValueError(
             f"{archive_dir} is a file. archive_dir names the directory the "
             f"archive is written into, not a file to write."
         )
 
-    if _storage.is_empty_dir(archive_dir, options):
+    if not _holds_an_archive(archive_dir, reports_dir, options):
         return
 
     if not overwrite:
         raise ValueError(
-            f"{archive_dir} is not empty. An archive directory is written once "
-            f"and kept, so this run would overwrite something. Pass "
-            f"overwrite=True to replace what is there, or name a new directory."
+            f"{archive_dir} already holds a calibration archive. An archive is "
+            f"written once and kept, so this run would overwrite it. Pass "
+            f"overwrite=True to replace it, or name a new directory."
         )
 
     # The channel set is a complete statement: without the clear, a channel
@@ -289,9 +302,10 @@ def save_calibration_archive(
         ValueError: If content is neither supplied nor on disk; if the mapping
             is empty or references a calibration file the channels do not
             carry; if a channel's file key is missing, shared with another
-            channel, or not a plain file name; or if *archive_dir* is not empty
-            and *overwrite* is False. Nothing is written when any of these
-            fires.
+            channel, or not a plain file name; or if *archive_dir* already
+            holds an archive and *overwrite* is False. Other files in the
+            directory are left alone either way. Nothing is written when any
+            of these fires.
     """
     base = output_base if output_base is not None else _default_output_base(
         calibration_outputs

@@ -138,6 +138,16 @@ def write_text(
     return str(path)
 
 
+def exists(
+    destination: Any,
+    storage_options: dict[str, Any] | None = None,
+) -> bool:
+    """True when a local path or a remote URL exists."""
+    if is_remote(destination):
+        return get_fs(destination, storage_options).exists(str(destination))
+    return Path(destination).exists()
+
+
 def is_empty_dir(
     destination: Any,
     storage_options: dict[str, Any] | None = None,

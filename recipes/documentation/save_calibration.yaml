@@ -24,9 +24,9 @@
 #              read from disk, which is the whole point: the container the
 #              phases ran in has no folder left to read.
 #
-# The destination is refused when it is not empty. An archive is written once
-# and kept, so replacing one is a decision, not a default: pass overwrite=true
-# to make it.
+# The destination is refused when it already holds an archive. An archive is
+# written once and kept, so replacing one is a decision, not a default: pass
+# overwrite=true to make it. Other files in the directory are left alone.
 #
 # Usage:
 #   aa-recipe run save_calibration.yaml --input archive_dir=./archive

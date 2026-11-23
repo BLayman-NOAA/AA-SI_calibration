@@ -17,9 +17,8 @@ The code is on the `calibration-endpoints` branch of AA_SI_UI, under
 | `POST /calibration/standardize` | Parses the manufacturer calibration files into channels for review. Scans every raw file, so it can take minutes. |
 | `POST /calibration/mapping` | Matches raw channels to calibrations and reports conflicts. Called repeatedly until no conflicts remain. |
 | `POST /calibration/archive` | Writes the finished calibration to the survey's archive folder. |
-| `DELETE /calibration/cache` | Deletes the cached raw file scan for one survey. |
 
-All four require a logged in user. From the frontend they are reached as
+All three require a logged in user. From the frontend they are reached as
 `/api/calibration/...`.
 
 Files:
@@ -31,7 +30,7 @@ Files:
   the ones in this folder with the survey specific defaults removed
 - `test/test_calibration.py`: tests
 
-It has been tested with the backend test suite and with a full run of all four
+It has been tested with the backend test suite and with a full run of all three
 endpoints on local example data. It has not been run against cloud storage or
 built into a Docker image.
 
@@ -55,8 +54,8 @@ Set these on the backend, in `.env` locally and on the Cloud Run service.
 
 | Variable | Required | Value |
 | --- | --- | --- |
-| `CALIBRATION_CACHE_DIR` | yes | A `gs://` folder for the raw file scan cache. Each survey gets its own subfolder. |
-| `CALIBRATION_ARCHIVE_ROOT` | yes, for archive | The `gs://` folder that ship folders sit under. For example `gs://<bucket>/HDD`. |
+| `CALIBRATION_CACHE_DIR` | yes | The root of the shared survey cache, `gs://ggn-nmfs-aa-prod-1-data/derived_products/Shared_Cache` in production. Each cruise gets a `<ship>/<cruise_id>` subfolder, shared with recipe manager users. |
+| `CALIBRATION_ARCHIVE_ROOT` | yes, for archive | The `gs://` folder that ship folders sit under, `gs://ggn-nmfs-aa-prod-1-data/HDD` in production. The calibration is saved to `<ship>/<cruise_id>/<sonar_model>/Calibration` under it. |
 | `CALIBRATION_EXECUTOR` | no | `sequential` (default) or `dask`. Use `dask` to scan raw files in parallel. |
 | `CALIBRATION_DASK_WORKERS` | no | Number of workers when using `dask`. Defaults to the CPU count. |
 | `CALIBRATION_WORK_DIR` | no | Local scratch folder. Defaults to the system temp folder. |
@@ -69,7 +68,7 @@ The rest of the API is unaffected.
 The backend's service account needs:
 
 - read access to the raw data and manufacturer calibration folders
-- read, write and delete on the cache folder
+- read and write on the cache folder
 - read and write on the archive folders
 
 A missing permission on the archive folder only shows up at the last step of
@@ -112,34 +111,10 @@ the defaults. Sizing has not been measured in Cloud Run yet. See
 A timeout on standardize loses no work. Each scanned file is saved to the
 cache as it goes, so sending the same request again resumes where it stopped.
 
-## Step 4: Add a lifecycle rule on the cache
+The cache is kept on purpose, as a foundation for later runs by anyone. Do not
+put a delete lifecycle rule on it.
 
-The UI clears a survey's cache with `DELETE /calibration/cache` once the survey
-is submitted. A user who starts calibration and never finishes leaves their
-cache behind. A bucket lifecycle rule cleans those up.
-
-Example, deleting cache objects after 30 days. Adjust the prefix to match
-`CALIBRATION_CACHE_DIR`.
-
-```json
-{
-  "rule": [
-    {
-      "action": { "type": "Delete" },
-      "condition": { "age": 30, "matchesPrefix": ["recipe_cache/calibration/"] }
-    }
-  ]
-}
-```
-
-```bash
-gcloud storage buckets update gs://<bucket> --lifecycle-file=lifecycle.json
-```
-
-This command replaces the bucket's whole lifecycle configuration. If the bucket
-already has rules, add this rule to the existing file.
-
-## Step 5: Build and smoke test
+## Step 4: Build and smoke test
 
 Build the image to confirm the new requirements install:
 
@@ -174,20 +149,14 @@ first and copy the `session_token` cookie.
    `single_channel_data` from the last mapping response. Check that the
    returned `archive_dir` holds `channel_mapping.yaml`,
    `calibration_provenance.yaml` and `Standardized_Reports/`.
-4. Archive again with the same body. Expect a 409, because the folder is no
-   longer empty.
-5. Delete the cache:
-
-   ```bash
-   curl -X DELETE "http://localhost:8080/calibration/cache?ship=Reuben_Lasker&cruise_id=RL2307_smoke&sonar_model=EK80" \
-     -b "session_token=<token>"
-   ```
-
-   Expect `"cleared": true`, and `"cleared": false` on a second call.
+4. Archive again with the same body. Expect a 409, because the folder now
+   holds an archive.
+5. Check that `<CALIBRATION_CACHE_DIR>/Reuben_Lasker/RL2307_smoke` now exists.
+   Nothing removes it, so delete that folder by hand once the test is done.
 
 Leave the time window out to process every raw file in the folder.
 
-## Step 6: Wire up the frontend
+## Step 5: Wire up the frontend
 
 The flow the UI needs:
 
@@ -202,7 +171,6 @@ The flow the UI needs:
 4. Show the `provenance` summary so the user can check the result.
 5. Call archive. Put the returned `archive_dir` into `calFileURI` on the
    submission form.
-6. After the Tugboat submission succeeds, call `DELETE /calibration/cache`.
 
 Points to watch:
 
@@ -211,8 +179,8 @@ Points to watch:
 - `ship` must be the folder name used in the bucket, such as `Reuben_Lasker`.
   It is not the display name used in the Tugboat form.
 - Use the same `ship`, `cruise_id` and `sonar_model` on every call for a
-  survey. They decide which cache is used, so changing one between standardize
-  and mapping forces a full rescan.
+  survey. `ship` and `cruise_id` decide which cache is used, so changing one
+  between standardize and mapping forces a full rescan.
 - Error messages are in `detail.message`. The existing Tugboat error handling
   in `CruiseForm.jsx` reads a different shape and will not pick them up.
 - On a standardize timeout, send the same request again.

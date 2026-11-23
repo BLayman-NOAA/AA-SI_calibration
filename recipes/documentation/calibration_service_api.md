@@ -2,7 +2,7 @@
 
 Three calls that turn manufacturer calibration files into a mapping from raw
 echosounder channels to the calibration that applies to them, and then archive
-the result, plus one that clears the survey's cache afterwards.
+the result.
 
 It is shaped so that a stateless server and a local CLI user run the same code
 path: the data a browser client edits is an ordinary recipe input, not a file
@@ -25,7 +25,6 @@ sizing a Cloud Run instance, see
 | `POST /calibration/standardize` | [calibration_standardize.yaml](calibration_standardize.yaml) | Parses the manufacturer files into one standardized record per channel and returns them for review. | Minutes. Scans every raw file in the window. |
 | `POST /calibration/mapping` | [calibration_mapping.yaml](calibration_mapping.yaml) | Matches raw channels against the reviewed records. Reports ambiguity instead of guessing. Called again with the user's choices, each one candidate to keep or several to average or merge, until nothing is ambiguous. | Seconds, with the scan cached. |
 | `POST /calibration/archive` | [save_calibration.yaml](save_calibration.yaml) | Writes the finished calibration to the survey's archive folder. | Seconds. |
-| `DELETE /calibration/cache` | none | Deletes the cached raw file scan for one survey once it is submitted. | Seconds. |
 
 Each recipe endpoint is one recipe run through `api.execute`. The backend runs
 general copies of the three recipes, kept in `src/backend/recipes/calibration/`
@@ -67,7 +66,7 @@ sequenceDiagram
     autonumber
     participant B as Browser client
     participant S as Calibration service
-    participant G as GCS cache
+    participant G as Shared survey cache
     participant A as Archive prefix
 
     B->>S: POST /calibration/standardize
@@ -98,11 +97,6 @@ sequenceDiagram
     S->>A: mapping, provenance, one file per channel
     S-->>B: 200 { archive_dir, files_written }
     deactivate S
-
-    Note over B: survey submitted to the archive
-
-    B->>S: DELETE /calibration/cache
-    S->>G: survey's cache folder removed
 ```
 
 Every call is synchronous. Each of the first three runs one recipe through
@@ -114,6 +108,15 @@ Call 2 reuses call 1's scan because both recipes declare those four steps
 identically, and cache entries are addressed by step hash. If the two recipe
 files ever drift, call 2 silently re-reads every file; a test asserts they
 match.
+
+**The cache is shared and kept.** Standardize and mapping write their
+checkpoints to the recipe manager's shared survey tier, one folder per cruise,
+so a later request for the same cruise reuses the scan whoever sends it. It is
+the same folder recipe manager users name as their `survey_cache_dir`, so
+their runs reuse the scan as well, and the service's runs reuse theirs. Reuse
+needs the same inputs: a different time window or input folder is a different
+scan. The service offers no call to clear the cache. The archive call keeps no
+checkpoints.
 
 **Treat a timeout on call 1 as "call it again".** It is bounded by a hard 60
 minute request ceiling on Cloud Run, but every file it reads is checkpointed as
@@ -138,9 +141,25 @@ letters, digits, `.`, `_` and `-`. Spaces and slashes are rejected with 422.
 They choose two folders, both under roots the deployment configures:
 
 ```
-cache:    <CALIBRATION_CACHE_DIR>/<ship>/<cruise_id>/<sonar_model>
-archive:  <CALIBRATION_ARCHIVE_ROOT>/<ship>/<cruise_id>/<sonar_model>/Calibration/archive
+cache:    <CALIBRATION_CACHE_DIR>/<ship>/<cruise_id>
+archive:  <CALIBRATION_ARCHIVE_ROOT>/<ship>/<cruise_id>/<sonar_model>/Calibration
 ```
+
+In production `CALIBRATION_ARCHIVE_ROOT` is
+`gs://ggn-nmfs-aa-prod-1-data/HDD`, so RL2307's calibration is saved to
+`gs://ggn-nmfs-aa-prod-1-data/HDD/Reuben_Lasker/RL2307/EK80/Calibration`. That
+is the survey's own Calibration folder, beside its manufacturer reports.
+`ship` is used as sent, so it must match the folder name already in the bucket
+or the files land in a new folder. Some surveys keep the sounder's files in a
+folder named `Echosounder` instead of the sonar model. When the cruise has no
+`<sonar_model>` folder but has an `Echosounder` one, the calibration is saved
+to `Echosounder/Calibration`.
+
+In production `CALIBRATION_CACHE_DIR` is
+`gs://ggn-nmfs-aa-prod-1-data/derived_products/Shared_Cache`, so HB1603's
+cache is `.../Shared_Cache/Henry_B._Bigelow/HB1603`. The cache folder has no
+sonar level: entries are addressed by a hash of their inputs, so two
+echosounders on one cruise share the folder without colliding.
 
 Send the same three values on every call for a survey. Mapping reuses the
 standardize scan only when both calls resolve to the same cache folder.
@@ -559,10 +578,10 @@ submission form's `calFileURI` takes.
 
 ```json
 {
-  "archive_dir": "gs://.../Calibration/archive",
-  "mapping_path": "gs://.../Calibration/archive/channel_mapping.yaml",
-  "provenance_path": "gs://.../Calibration/archive/calibration_provenance.yaml",
-  "reports_dir": "gs://.../Calibration/archive/Standardized_Reports",
+  "archive_dir": "gs://.../Calibration",
+  "mapping_path": "gs://.../Calibration/channel_mapping.yaml",
+  "provenance_path": "gs://.../Calibration/calibration_provenance.yaml",
+  "reports_dir": "gs://.../Calibration/Standardized_Reports",
   "channel_count": 10,
   "files_written": ["...", "..."]
 }
@@ -592,7 +611,10 @@ against the other.
 An archive that looks complete and is not is worse than a failed call, so these
 are refused. Nothing is written when one fires.
 
-- an archive folder that is not empty, unless `overwrite` is set;
+- a folder that already holds an archive (a `channel_mapping.yaml`, a
+  `calibration_provenance.yaml`, or files under `Standardized_Reports/`),
+  unless `overwrite` is set. Anything else in the folder, such as
+  `Manufacturer_Reports/`, neither blocks the call nor is touched by it;
 - an empty `mapping_dict`, which is what the mapping call returns while
   conflicts are outstanding;
 - a `mapping_dict` naming a calibration file that `single_channel_data` does not
@@ -602,30 +624,6 @@ are refused. Nothing is written when one fires.
   trusted: a key carrying a path separator would write outside the folder,
   and two channels sharing a key would write one over the other and report both
   as archived.
-
-## DELETE /calibration/cache
-
-Deletes the survey's cache folder, which holds the raw file scan that lets
-mapping skip it. Call it once the survey has been submitted. The archive does
-not depend on the cache, but running calibration for the survey again
-afterwards scans every raw file again.
-
-### Request
-
-The three [survey fields](#survey-fields), as query parameters.
-
-```
-DELETE /calibration/cache?ship=Reuben_Lasker&cruise_id=RL2307&sonar_model=EK80
-```
-
-### Response
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `cache_dir` | string | The cache folder for the survey. |
-| `cleared` | boolean | `true` when something was deleted, `false` when the folder was already gone. |
-
-Calling it twice is safe: the second call returns `"cleared": false`.
 
 ## Channel object
 
@@ -827,8 +825,8 @@ candidate. A mapping warning is also listed on its calibration's entry in the
 `warnings` is an empty list when the call checked and found nothing, and
 `null` when the step was loaded from a survey cache written before warnings
 existed. A cached mapping from then also keeps the coverage rules of its time.
-After deploying this version, clear each survey's cache with
-[DELETE /calibration/cache](#delete-calibrationcache) to check it again.
+Such a step keeps returning `null` until its entries are removed from the
+shared cache, which is done by hand; the service has no call for it.
 
 ## Provenance object
 
@@ -1154,7 +1152,7 @@ FastAPI's own error bodies, and a 503 carries only `message`.
 | Candidates cannot be averaged | 400 | `ValueError: conflict-...: Cannot average these calibrations: <field> differs (<key>: <value>, ...)`, or `... the result is not a valid standardized record` when a source carries a value the schema rejects. Show it against the conflict it names; the user picks one candidate instead, or corrects the field during review if the records should agree. No choice in the request was applied. |
 | Invalid channel edit | 422 | `jsonschema.ValidationError`. An edited value failed the standardized schema; the message names the field and the expected type. Surface it on the field the user touched. |
 | No raw or calibration files found | 404 | `FileNotFoundError` from an empty or wrong input folder, or a time window that matches no raw file. |
-| Archive directory not empty | 409 | `ValueError: ... is not empty`. Confirm with the user, then resend with `overwrite: true`. |
+| Archive already there | 409 | `ValueError: ... already holds a calibration archive`. Confirm with the user, then resend with `overwrite: true`, which replaces the earlier archive's files and nothing else in the folder. |
 | Archiving an empty mapping | 409 | `ValueError: mapping_dict is empty`. Conflicts are still outstanding; there is nothing to archive yet. |
 | Archive content mismatch | 400 | `ValueError: The mapping references ... not in single_channel_data`. The two fields came from different mapping runs; resend both from the same response. |
 | Bad calibration file key | 400 | `ValueError: ... cannot be used as filenames` or `... appear on more than one channel`. A key must be one plain file name, unique across channels. Resend `single_channel_data` unchanged. |
@@ -1166,8 +1164,12 @@ Any other `ValueError` a step raises is returned as 400.
 ## Running it locally
 
 None of this is web-only. A local user runs the three recipes next to this
-document and works with the calibration folder directly. The survey fields and
-the cache endpoint belong to the service and have no local counterpart.
+document and works with the calibration folder directly. The survey fields
+belong to the service and have no local counterpart. To reuse a scan the
+service already made, set `survey_cache_dir` to the cruise's shared cache
+folder, such as
+`gs://ggn-nmfs-aa-prod-1-data/derived_products/Shared_Cache/Reuben_Lasker/RL2307`,
+and run with the same input folders and time window.
 
 ```bash
 aa-recipe run calibration_standardize.yaml
